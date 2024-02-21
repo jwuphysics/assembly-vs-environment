@@ -1,4 +1,5 @@
-# Comparing halo assembly history against environment: which is more important for predicting galaxy properties?
+# Assembly versus Environment
+Is halo assembly history or environment more important for learning galaxy properties? 
 
 ## Data
 

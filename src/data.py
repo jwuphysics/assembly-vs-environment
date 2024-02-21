@@ -1,18 +1,18 @@
-import h5py
-import scipy
-import os
-import glob
 from astropy.io import fits
-
+import glob
+import h5py
+import illustris_python as il
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import os
 from pathlib import Path
 import pickle
-import matplotlib.pyplot as plt
-import illustris_python as il
+import random
+import scipy
 import tqdm
 
-import random
+
 
 ROOT = Path(__file__).parent.parent.resolve()
 tng_base_path = f"{ROOT}/illustris_data/TNG100-1"

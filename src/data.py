@@ -1,3 +1,25 @@
+import h5py
+import scipy
+import os
+import glob
+from astropy.io import fits
+
+import numpy as np
+import pandas as pd
+from pathlib import Path
+import pickle
+import matplotlib.pyplot as plt
+import illustris_python as il
+import tqdm
+
+import random
+
+ROOT = Path(__file__).parent.parent.resolve()
+tng_base_path = f"{ROOT}/illustris_data/TNG100-1"
+
+seed = 255
+rng = np.random.RandomState(seed)
+random.seed(seed)
 
 
 cuts = {
@@ -9,21 +31,21 @@ h = 0.6774                  # reduced Hubble constant
 snapshot = 99
 
 
-def load_subhalos(hydro=True, normalization_params=normalization_params, cuts=cuts, snapshot=snapshot):
+def load_subhalos(hydro=True, cuts=cuts, snapshot=snapshot):
     
     use_cols = ['subhalo_x', 'subhalo_y', 'subhalo_z', 'subhalo_vx', 'subhalo_vy', 'subhalo_vz', 'subhalo_loghalomass', 'subhalo_logvmax'] 
-    y_cols = ['subhalo_logstellarmass']
+    y_cols = ['subhalo_logstellarmass', 'subhalo_loggasmass', 'subhalo_logsfr', 'subhalo_gasmetallicity', 'subhalo_starmetallicity']
 
  
-    base_path = tng_base_path.replace("TNG300-1", "TNG300-1-Dark") if not hydro else tng_base_path
+    base_path = (tng_base_path.replace("-1", "-1-Dark") if not hydro else tng_base_path) + "/output"
 
     subhalo_fields = [
         "SubhaloPos", "SubhaloMassType", "SubhaloLenType", "SubhaloHalfmassRadType", 
-        "SubhaloVel", "SubhaloVmax", "SubhaloGrNr", 
+        "SubhaloVel", "SubhaloVmax", "SubhaloGrNr"
     ]
 
     if hydro:
-        subhalo_fields += ["SubhaloFlag"]
+        subhalo_fields += ["SubhaloFlag", "SubhaloSFR", "SubhaloGasMetallicity", "SubhaloStarMetallicity"]
 
     subhalos = il.groupcat.loadSubhalos(base_path, snapshot, fields=subhalo_fields) 
 
@@ -33,19 +55,20 @@ def load_subhalos(hydro=True, normalization_params=normalization_params, cuts=cu
     halos = il.groupcat.loadHalos(base_path, snapshot, fields=halo_fields)
 
     subhalo_pos = subhalos["SubhaloPos"][:] / (h*1e3)
+    subhalo_gasmass = subhalos["SubhaloMassType"][:,0]
     subhalo_stellarmass = subhalos["SubhaloMassType"][:,4]
     subhalo_halomass = subhalos["SubhaloMassType"][:,1]
     subhalo_n_stellar_particles = subhalos["SubhaloLenType"][:,4]
-    subhalo_stellarhalfmassradius = subhalos["SubhaloHalfmassRadType"][:,4]  / normalization_params["norm_half_mass_radius"]
-    subhalo_vel = subhalos["SubhaloVel"][:] /  normalization_params["norm_velocity"]
-    subhalo_vmax = subhalos["SubhaloVmax"][:] / normalization_params["norm_velocity"]
+    subhalo_stellarhalfmassradius = subhalos["SubhaloHalfmassRadType"][:,4] 
+    subhalo_vel = subhalos["SubhaloVel"][:]
+    subhalo_vmax = subhalos["SubhaloVmax"][:]
     subhalo_flag = subhalos["SubhaloFlag"][:] if hydro else np.ones_like(subhalo_halomass) # note dummy values of 1 if DMO
     halo_id = subhalos["SubhaloGrNr"][:].astype(int)
 
     halo_mass = halos["Group_M_Crit200"][:]
     halo_primarysubhalo = halos["GroupFirstSub"][:].astype(int)
     group_pos = halos["GroupPos"][:] / (h*1e3)
-    group_vel = halos["GroupVel"][:]  / normalization_params["norm_velocity"]
+    group_vel = halos["GroupVel"][:]
 
     halos = pd.DataFrame(
         np.column_stack((np.arange(len(halo_mass)), group_pos, group_vel, halo_mass, halo_primarysubhalo)),
@@ -55,39 +78,62 @@ def load_subhalos(hydro=True, normalization_params=normalization_params, cuts=cu
     halos.set_index("halo_id", inplace=True)
     
     # get subhalos/galaxies      
-    subhalos = pd.DataFrame(
-        np.column_stack([halo_id, subhalo_flag, np.arange(len(subhalo_stellarmass)), subhalo_pos, subhalo_vel, subhalo_n_stellar_particles, subhalo_stellarmass, subhalo_halomass, subhalo_stellarhalfmassradius, subhalo_vmax]), 
-        columns=['halo_id', 'subhalo_flag', 'subhalo_id', 'subhalo_x', 'subhalo_y', 'subhalo_z', 'subhalo_vx', 'subhalo_vy', 'subhalo_vz', 'subhalo_n_stellar_particles', 'subhalo_stellarmass', 'subhalo_halomass', 'subhalo_stellarhalfmassradius', 'subhalo_vmax'],
+    df = pd.DataFrame(
+        np.column_stack([halo_id, subhalo_flag, np.arange(len(subhalo_stellarmass)), subhalo_pos, subhalo_vel, subhalo_n_stellar_particles, subhalo_gasmass, subhalo_stellarmass, subhalo_halomass, subhalo_stellarhalfmassradius, subhalo_vmax]), 
+        columns=['halo_id', 'subhalo_flag', 'subhalo_id', 'subhalo_x', 'subhalo_y', 'subhalo_z', 'subhalo_vx', 'subhalo_vy', 'subhalo_vz', 'subhalo_n_stellar_particles', 'subhalo_gasmass', 'subhalo_stellarmass', 'subhalo_halomass', 'subhalo_stellarhalfmassradius', 'subhalo_vmax'],
     )
-    subhalos["is_central"] = (halos.loc[subhalos.halo_id]["halo_primarysubhalo"].values == subhalos["subhalo_id"].values)
+    df["is_central"] = (halos.loc[df.halo_id]["halo_primarysubhalo"].values == df["subhalo_id"].values)
     
     # DMO-hydro matching
     if hydro:
-        dmo_hydro_match = h5py.File(f"{ROOT}/illustris_data/TNG300-1/postprocessing/subhalo_matching_to_dark.hdf5")
-        subhalos["subhalo_l_halo_tree"] = dmo_hydro_match["Snapshot_99"]["SubhaloIndexDark_LHaloTree"]
-        subhalos["subhalo_sublink"] = dmo_hydro_match["Snapshot_99"]["SubhaloIndexDark_SubLink"]      
+        dmo_hydro_match = h5py.File(f"{tng_base_path}/postprocessing/subhalo_matching_to_dark.hdf5")
+        df["subhalo_l_halo_tree"] = dmo_hydro_match["Snapshot_99"]["SubhaloIndexDark_LHaloTree"]
+        df["subhalo_sublink"] = dmo_hydro_match["Snapshot_99"]["SubhaloIndexDark_SubLink"]      
+
+        df["subhalo_sfr"] = subhalos["SubhaloSFR"][:]
+        df["subhalo_gasmetallicity"] = subhalos["SubhaloGasMetallicity"][:] / 0.0127    # in solar metallicity units
+        df["subhalo_starmetallicity"] = subhalos["SubhaloStarMetallicity"][:] / 0.0127  # in solar metallicity units
+
 
     # only drop in hydro
     if hydro:
-        subhalos = subhalos[subhalos["subhalo_flag"] != 0].copy()
-    subhalos['halo_id'] = subhalos['halo_id'].astype(int)
-    subhalos['subhalo_id'] = subhalos['subhalo_id'].astype(int)
+        df = df[df["subhalo_flag"] != 0].copy()
+    df['halo_id'] = df['halo_id'].astype(int)
+    df['subhalo_id'] = df['subhalo_id'].astype(int)
 
-    subhalos["subhalo_logstellarmass"] = np.log10(subhalos["subhalo_stellarmass"] / h)+10
-    subhalos["subhalo_loghalomass"] = np.log10(subhalos["subhalo_halomass"] / h)+10
-    subhalos["subhalo_logvmax"] = np.log10(subhalos["subhalo_vmax"])
-    subhalos["subhalo_logstellarhalfmassradius"] = np.log10(subhalos["subhalo_stellarhalfmassradius"])
-        
+    df["subhalo_logstellarmass"] = np.log10(df["subhalo_stellarmass"] / h)+10
+    df["subhalo_loghalomass"] = np.log10(df["subhalo_halomass"] / h)+10
+    df["subhalo_logvmax"] = np.log10(df["subhalo_vmax"])
+    df["subhalo_logstellarhalfmassradius"] = np.log10(df["subhalo_stellarhalfmassradius"])
+    df["subhalo_loggasmass"] = np.log10(df["subhalo_gasmass"])
+    if hydro:
+        df["subhalo_logsfr"] = np.log10(df["subhalo_sfr"])
+        df["subhalo_gasmetallicity"] = np.log10(df["subhalo_gasmetallicity"]) + 12
+        df["subhalo_starmetallicity"] = np.log10(df["subhalo_starmetallicity"]) + 12
+
+    # drop non-log columns
+    df.drop(
+        ['subhalo_gasmass', 'subhalo_stellarmass', 'subhalo_halomass', 'subhalo_stellarhalfmassradius', 'subhalo_vmax'], 
+        axis=1, 
+        inplace=True
+    )
+
     if hydro:
         # DM cuts -- do not put outside `if` statement, otherwise indices will be missing during the `prepare_subhalos()` call
-        subhalos.drop("subhalo_flag", axis=1, inplace=True)
-        subhalos = subhalos[subhalos["subhalo_loghalomass"] > cuts["minimum_log_halo_mass"]].copy()
+        df.drop("subhalo_flag", axis=1, inplace=True)
+        df = df[df["subhalo_loghalomass"] > cuts["minimum_log_halo_mass"]].copy()
         # stellar mass and particle cuts
-        # subhalos = subhalos[subhalos["subhalo_n_stellar_particles"] > cuts["minimum_n_star_particles"]].copy()
-        # subhalos = subhalos[subhalos["subhalo_logstellarmass"] > cuts["minimum_log_stellar_mass"]].copy()
-    
-    
-    return subhalos
+        # df = df[df["subhalo_n_stellar_particles"] > cuts["minimum_n_star_particles"]].copy()
+        # df = df[df["subhalo_logstellarmass"] > cuts["minimum_log_stellar_mass"]].copy()
+        
+        # more columns to drop
+        df.drop(
+            ['subhalo_sfr'], 
+            axis=1, 
+            inplace=True
+        )
+
+    return df
 
 def prepare_subhalos(cuts=cuts):
     """Helper function to load subhalos, join to DMO simulation, add cosmic web

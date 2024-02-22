@@ -31,7 +31,9 @@ h = 0.6774                  # reduced Hubble constant
 snapshot = 99
 
 
-def load_subhalos(hydro=True, cuts=cuts, snapshot=snapshot):
+def load_subhalos(hydro: bool=True, cuts: dict=cuts, snapshot: int=snapshot) -> pd.DataFrame:
+    """Load in TNG FoF_subfind subhalo catalog with relevant columns
+    """
     
     use_cols = ['subhalo_x', 'subhalo_y', 'subhalo_z', 'subhalo_vx', 'subhalo_vy', 'subhalo_vz', 'subhalo_loghalomass', 'subhalo_logvmax'] 
     y_cols = ['subhalo_logstellarmass', 'subhalo_loggasmass', 'subhalo_logsfr', 'subhalo_gasmetallicity', 'subhalo_starmetallicity']
@@ -135,9 +137,9 @@ def load_subhalos(hydro=True, cuts=cuts, snapshot=snapshot):
 
     return df
 
-def prepare_subhalos(cuts=cuts):
-    """Helper function to load subhalos, join to DMO simulation, add cosmic web
-    parameters, and impose cuts.
+def prepare_subhalos(cuts: dict=cuts) -> pd.DataFrame:
+    """Helper function to load and join subhalos from dark matter only (DMO)
+    and hydrodynamic simulations.
 
     Note that we force LHaloTree and sublink DMO linking methods to match.
     """
@@ -167,3 +169,7 @@ def prepare_subhalos(cuts=cuts):
     subhalos_linked.dropna(inplace=True, axis=0)
 
     return subhalos_linked
+
+
+def plant_tree():
+    pass

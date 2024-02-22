@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import scipy
 import torch
 import torch.nn as nn
@@ -11,7 +12,9 @@ boxsize = (75 / 0.6774)     # box size in comoving Mpc/h
 h = 0.6774                  # reduced Hubble constant
 snapshot = 99
 
-def make_cosmic_graph(subhalos, D_link, periodic=True):
+def make_cosmic_graph(subhalos: pd.DataFrame, D_link: int, periodic: bool=True) -> torch_geometric.Data:
+    """Produces an environmental (3d) graph from a subhalo catalog with some fixed linking length
+    """
     df = subhalos.copy()
 
     subhalo_id = torch.tensor(df.index.values, dtype=torch.long)

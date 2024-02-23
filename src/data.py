@@ -170,6 +170,45 @@ def prepare_subhalos(cuts: dict=cuts) -> pd.DataFrame:
 
     return subhalos_linked
 
+def load_trees(filename: Path, cuts=cuts) -> pd.DataFrame:
+    """Load in merger tree catalogs from dark matter only simulation
+    """
 
-def plant_tree():
-    pass
+    keys = ["SubhaloID", "SnapNum", "SubfindID", "DescendantID", "RootDescendantID", "SubhaloMass"]
+
+    with h5py.File(filename, 'r') as f:
+        df = pd.DataFrame(
+            {key: f[key][:] for key in keys}
+        )
+
+    # rename and process columns -- note e.g. that what we call "subhalo_id_in_current_snapshot" is actually 
+    # "SubfindID" and indexes into the subhalo group catalog at a given snapshot. For snapshot 99 in the 
+    # environmental graph, we call this "subhalo_id"
+
+    df.rename(
+        {
+            "SubfindID": "subhalo_id_in_this_snapshot",
+            "DescendantID": "descendent_id",
+            "RootDescendantID": "root_descendent_id",
+            "SnapNum": "snapshot",
+            "SubhaloID": "subhalo_tree_id",
+        },
+        axis=1,
+        inplace=True
+    )
+
+    df["subhalo_loghalomass"] = np.log10(df["SubhaloMass"]) + 10
+    df.drop(["SubhaloMass"], axis=1, inplace=True)
+    # print("Number of subhalos in tree", len(df))
+
+    # apply cuts *only on root subhalo*
+    is_massive_root = (
+        (df["descendent_id"] == -1)
+        & (df["subhalo_loghalomass"] >= cuts["minimum_log_halo_mass"])
+    )
+    # print("Number of massive root subhalos", sum(is_massive_root))
+
+    will_become_massive = df["root_descendent_id"].isin(df["subhalo_tree_id"][is_massive_root])
+    # print("Number of subhalos in trees that will become massive root subhalos", sum(will_become_massive))
+    
+    return df[will_become_massive]

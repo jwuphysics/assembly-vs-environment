@@ -1,3 +1,4 @@
+import h5py
 import numpy as np
 import pandas as pd
 import scipy
@@ -133,3 +134,23 @@ def make_cosmic_graph(subhalos: pd.DataFrame, D_link: int, periodic: bool=True) 
     )
 
     return data
+
+def make_assembly_graph(trees: pd.DataFrame) -> list[torch_geometric.Data]:
+
+
+    # define root_ids
+
+    graphs = list()
+    
+    # iterate over individual trees
+    for root_descendent_id, tree in trees.groupby("root_descendent_id"):
+
+        # create trees
+        
+
+        graph = pd.Data(
+            x=x, y=y, edge_index=edge_index, edge_attr=edge_attr
+        )
+
+        graphs.append(graph)
+    return graphs

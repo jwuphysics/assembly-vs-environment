@@ -13,7 +13,7 @@ boxsize = (75 / 0.6774)     # box size in comoving Mpc/h
 h = 0.6774                  # reduced Hubble constant
 snapshot = 99
 
-def make_cosmic_graph(subhalos: pd.DataFrame, D_link: int, periodic: bool=True) -> torch_geometric.Data:
+def make_cosmic_graph(subhalos: pd.DataFrame, D_link: int, periodic: bool=True) -> Data:
     """Produces an environmental (3d) graph from a subhalo catalog with some fixed linking length
     """
     df = subhalos.copy()
@@ -135,21 +135,48 @@ def make_cosmic_graph(subhalos: pd.DataFrame, D_link: int, periodic: bool=True) 
 
     return data
 
-def make_assembly_graph(trees: pd.DataFrame) -> list[torch_geometric.Data]:
-
+def make_merger_tree_graph(trees: pd.DataFrame, subhalos: pd.DataFrame) -> list[Data]:
+    """Use merger trees and z=0 subhalo catalog to create graphs of
+    merger trees with final subhalo stellar mass as estimate
+    """
 
     # define root_ids
 
     graphs = list()
+    import tqdm
     
     # iterate over individual trees
-    for root_descendent_id, tree in trees.groupby("root_descendent_id"):
+    for root_descendent_id, tree in tqdm.tqdm(trees.groupby("root_descendent_id")):
+
+        # skip if it's not in z = 0 catalog
+        root_subhalo_id = tree.loc[root_descendent_id]["subhalo_id_in_this_snapshot"].astype(int)
+
+        if root_subhalo_id not in subhalos.index.values:
+            continue
+        root_subhalo = subhalos.iloc[root_subhalo_id]
+
+        #  skip if not a central
+        if ~root_subhalo.is_central:
+            continue
+
+        x = torch.tensor(
+            trees[["subhalo_loghalomass", "snapshot"]].values,
+            dtype=torch.float
+        )
+
+        edges = [(s, d) for s, d in zip(tree.subhalo_tree_id.values, tree.descendent_id.values) if d != -1]
+        edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous()
+
+        # TODO add edge attributes?
+
+        final_logstellarmass = torch.tensor(root_subhalo["subhalo_logstellarmass"], dtype=torch.float)
 
         # create trees
-        
-
-        graph = pd.Data(
-            x=x, y=y, edge_index=edge_index, edge_attr=edge_attr
+        graph = Data(
+            x=x, 
+            edge_index=edge_index, 
+            # edge_attr=edge_attr, 
+            final_logstellarmass=final_logstellarmass
         )
 
         graphs.append(graph)

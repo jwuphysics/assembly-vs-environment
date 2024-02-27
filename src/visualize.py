@@ -46,7 +46,13 @@ def plot_merger_tree(
 
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=vmin, vmax=vmax))
     sm._A = []
-    cbar = plt.colorbar(sm, label=r"$\log(M_{\rm halo}/M_\odot)$", aspect=60, shrink=0.8)
+    cbar = plt.colorbar(
+        sm,
+        ax=plt.gca(),
+        label=r"$\log(M_{\rm halo}/M_\odot)$", 
+        aspect=60, 
+        shrink=0.8
+    )
 
     if title is not None:
         plt.title(title)

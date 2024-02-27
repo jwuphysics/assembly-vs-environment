@@ -140,44 +140,25 @@ def make_merger_tree_graph(trees: pd.DataFrame, subhalos: pd.DataFrame) -> list[
     merger trees with final subhalo stellar mass as estimate
     """
 
-    # define root_ids
+    graphs = []
+    subhalo_ids_set = set(subhalos.index.values) 
 
-    graphs = list()
-    import tqdm
-    
-    # iterate over individual trees
-    for root_descendent_id, tree in tqdm.tqdm(trees.groupby("root_descendent_id")):
+    for root_descendent_id, tree in trees.groupby("root_descendent_id"):
+        root_subhalo_id = tree.loc[root_descendent_id, "subhalo_id_in_this_snapshot"].astype(int)
 
-        # skip if it's not in z = 0 catalog
-        root_subhalo_id = tree.loc[root_descendent_id]["subhalo_id_in_this_snapshot"].astype(int)
-
-        if root_subhalo_id not in subhalos.index.values:
+        if root_subhalo_id not in subhalo_ids_set:
             continue
-        root_subhalo = subhalos.iloc[root_subhalo_id]
+        root_subhalo = subhalos.loc[root_subhalo_id]
 
-        #  skip if not a central
-        if ~root_subhalo.is_central:
+        if not root_subhalo.is_central:
             continue
 
-        x = torch.tensor(
-            trees[["subhalo_loghalomass", "snapshot"]].values,
-            dtype=torch.float
-        )
-
+        x = torch.tensor(tree[["subhalo_loghalomass", "snapshot"]].values, dtype=torch.float)
         edges = [(s, d) for s, d in zip(tree.subhalo_tree_id.values, tree.descendent_id.values) if d != -1]
         edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous()
+        final_logstellarmass = torch.tensor([root_subhalo["subhalo_logstellarmass"]], dtype=torch.float)
 
-        # TODO add edge attributes?
-
-        final_logstellarmass = torch.tensor(root_subhalo["subhalo_logstellarmass"], dtype=torch.float)
-
-        # create trees
-        graph = Data(
-            x=x, 
-            edge_index=edge_index, 
-            # edge_attr=edge_attr, 
-            final_logstellarmass=final_logstellarmass
-        )
-
+        graph = Data(x=x, edge_index=edge_index, y=final_logstellarmass)
         graphs.append(graph)
+
     return graphs

@@ -135,7 +135,7 @@ def make_cosmic_graph(subhalos: pd.DataFrame, D_link: int, periodic: bool=True) 
 
     return data
 
-def make_merger_tree_graph(trees: pd.DataFrame, subhalos: pd.DataFrame) -> list[Data]:
+def make_merger_tree_graphs(trees: pd.DataFrame, subhalos: pd.DataFrame) -> list[Data]:
     """Use merger trees and z=0 subhalo catalog to create graphs of
     merger trees with final subhalo stellar mass as estimate
     """
@@ -154,11 +154,23 @@ def make_merger_tree_graph(trees: pd.DataFrame, subhalos: pd.DataFrame) -> list[
         if not root_subhalo.is_central:
             continue
 
+        if not np.isfinite(root_subhalo.subhalo_logstellarmass):
+            continue
+
         x = torch.tensor(tree[["subhalo_loghalomass", "snapshot"]].values, dtype=torch.float)
+        
         edges = [(s, d) for s, d in zip(tree.subhalo_tree_id.values, tree.descendent_id.values) if d != -1]
-        edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous()
+        
+        # edges represented as subhalo_tree_ids (not needed)
+        # edge_ids = torch.tensor(edges, dtype=torch.long).t().contiguous()
+        
+        # edges represented as incrementing indices (reset for each tree)
+        id2idx = {id: idx for id, idx in zip(tree.subhalo_tree_id.values, np.arange(len(tree)))}
+        edge_index = torch.tensor(([[id2idx[e1], id2idx[e2]] for (e1, e2) in edges]), dtype=torch.long).t().contiguous()
+        
         final_logstellarmass = torch.tensor([root_subhalo["subhalo_logstellarmass"]], dtype=torch.float)
 
+        # TODO - remove snapshot number as node feature, input differences as edge features
         graph = Data(x=x, edge_index=edge_index, y=final_logstellarmass)
         graphs.append(graph)
 

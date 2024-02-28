@@ -31,8 +31,6 @@ def plot_merger_tree(
     pos = graphviz_layout(G, prog="dot")
     m = tree.subhalo_loghalomass.values
 
-    print(len(edges), m.shape)
-
     nx.draw(
         G, 
         pos=pos, 

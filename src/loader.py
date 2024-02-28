@@ -110,7 +110,7 @@ def make_cosmic_graph(subhalos: pd.DataFrame, D_link: int, periodic: bool=True) 
     target_nodes = edge_index[1]
     overdensity = torch.log10(
         scatter_add(
-            10**(torch.tensor(x.clone().detach()[source_nodes, 0])), 
+            10**(x.clone().detach()[source_nodes, 0]), 
             index=torch.tensor(target_nodes), 
             dim=0, 
             dim_size=len(x)
@@ -144,7 +144,8 @@ def make_merger_tree_graph(trees: pd.DataFrame, subhalos: pd.DataFrame) -> list[
     subhalo_ids_set = set(subhalos.index.values) 
 
     for root_descendent_id, tree in trees.groupby("root_descendent_id"):
-        root_subhalo_id = tree.loc[root_descendent_id, "subhalo_id_in_this_snapshot"].astype(int)
+
+        root_subhalo_id = tree.set_index("subhalo_tree_id").loc[root_descendent_id, "subhalo_id_in_this_snapshot"].astype(int)
 
         if root_subhalo_id not in subhalo_ids_set:
             continue

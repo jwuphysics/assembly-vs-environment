@@ -141,23 +141,32 @@ def make_merger_tree_graphs(trees: pd.DataFrame, subhalos: pd.DataFrame) -> list
     """
 
     graphs = []
-    subhalo_ids_set = set(subhalos.index.values) 
+
+    subhalos.set_index(["subhalo_id_DMO"], inplace=True)
+    all_subhalo_id_DMO = set(subhalos.index.values) 
+
+    N_not_in_subhalo_cat = 0
+    N_is_satellite = 0
+    N_bad_stellar_mass = 0
 
     for root_descendent_id, tree in trees.groupby("root_descendent_id"):
 
         root_subhalo_id = tree.set_index("subhalo_tree_id").loc[root_descendent_id, "subhalo_id_in_this_snapshot"].astype(int)
 
-        if root_subhalo_id not in subhalo_ids_set:
+        if root_subhalo_id not in all_subhalo_id_DMO:
+            N_not_in_subhalo_cat += 1
             continue
         root_subhalo = subhalos.loc[root_subhalo_id]
 
         if not root_subhalo.is_central:
+            N_is_satellite += 1
             continue
 
         if not np.isfinite(root_subhalo.subhalo_logstellarmass):
+            N_bad_stellar_mass += 1
             continue
 
-        x = torch.tensor(tree[["subhalo_loghalomass", "snapshot"]].values, dtype=torch.float)
+        x = torch.tensor(tree[["subhalo_loghalomass_DMO", "snapshot"]].values, dtype=torch.float)
         
         edges = [(s, d) for s, d in zip(tree.subhalo_tree_id.values, tree.descendent_id.values) if d != -1]
         
@@ -174,4 +183,9 @@ def make_merger_tree_graphs(trees: pd.DataFrame, subhalos: pd.DataFrame) -> list
         graph = Data(x=x, edge_index=edge_index, y=final_logstellarmass)
         graphs.append(graph)
 
+    print(
+        N_not_in_subhalo_cat,
+        N_is_satellite,
+        N_bad_stellar_mass
+    )
     return graphs

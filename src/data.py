@@ -202,13 +202,13 @@ def load_trees(cuts=cuts) -> pd.DataFrame:
             inplace=True
         )
     
-        df["subhalo_loghalomass"] = np.log10(df["SubhaloMass"]) + 10
+        df["subhalo_loghalomass_DMO"] = np.log10(df["SubhaloMass"]) + 10
         df.drop(["SubhaloMass"], axis=1, inplace=True)
     
         # apply cuts *only on root subhalo*
         is_massive_root = (
             (df["descendent_id"] == -1)
-            & (df["subhalo_loghalomass"] >= cuts["minimum_log_halo_mass"])
+            & (df["subhalo_loghalomass_DMO"] >= cuts["minimum_log_halo_mass"])
         )
     
         will_become_massive = df["root_descendent_id"].isin(df["subhalo_tree_id"][is_massive_root])

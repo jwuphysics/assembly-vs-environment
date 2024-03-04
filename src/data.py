@@ -171,10 +171,10 @@ def prepare_subhalos(cuts: dict=cuts) -> pd.DataFrame:
     return subhalos_linked
 
 def load_trees(cuts=cuts) -> pd.DataFrame:
-    """Load in all merger tree catalogs from dark matter only simulation
+    """Load in all merger tree catalogs from dark matter only simulation, subject to optional mass cuts.
     """
 
-    keys = ["SubhaloID", "SnapNum", "SubfindID", "DescendantID", "RootDescendantID", "SubhaloMass"]
+    keys = ["SubhaloID", "SnapNum", "SubfindID", "DescendantID", "RootDescendantID", "SubhaloMass", "SubhaloVmax", "GroupFirstSub"]
 
     list_of_trees = []
 
@@ -197,22 +197,27 @@ def load_trees(cuts=cuts) -> pd.DataFrame:
                 "RootDescendantID": "root_descendent_id",
                 "SnapNum": "snapshot",
                 "SubhaloID": "subhalo_tree_id",
+                "GroupFirstSub": "is_central",
             },
             axis=1,
             inplace=True
         )
     
         df["subhalo_loghalomass_DMO"] = np.log10(df["SubhaloMass"]) + 10
-        df.drop(["SubhaloMass"], axis=1, inplace=True)
+        df["subhalo_logvmax_DMO"] = np.log10(df["SubhaloVmax"])
+        df.drop(["SubhaloMass", "SubhaloVmax"], axis=1, inplace=True)
+
+        # apply mass cuts *only on root subhalo*
+        if cuts is not None:
+            is_massive_root = (
+                (df["descendent_id"] == -1)
+                & (df["subhalo_loghalomass_DMO"] >= cuts["minimum_log_halo_mass"])
+            )
     
-        # apply cuts *only on root subhalo*
-        is_massive_root = (
-            (df["descendent_id"] == -1)
-            & (df["subhalo_loghalomass_DMO"] >= cuts["minimum_log_halo_mass"])
-        )
-    
-        will_become_massive = df["root_descendent_id"].isin(df["subhalo_tree_id"][is_massive_root])
-        list_of_trees.append(df[will_become_massive])
+            will_become_massive = df["root_descendent_id"].isin(df["subhalo_tree_id"][is_massive_root])
+            list_of_trees.append(df[will_become_massive])
+        else:
+            list_of_trees.append(df)
         
     trees = pd.concat(list_of_trees, axis=0)
     return trees

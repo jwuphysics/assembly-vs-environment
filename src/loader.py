@@ -137,7 +137,10 @@ def make_cosmic_graph(subhalos: pd.DataFrame, D_link: int, periodic: bool=True) 
 
 def make_merger_tree_graphs(trees: pd.DataFrame, subhalos: pd.DataFrame) -> list[Data]:
     """Use merger trees and z=0 subhalo catalog to create graphs of
-    merger trees with final subhalo stellar mass as estimate
+    merger trees with final subhalo stellar mass as estimate. 
+
+    Note that subhalos catalog will impose additional cuts -- make sure 
+    that these are consistent with the merger tree cuts!
     """
 
     graphs = []
@@ -166,7 +169,7 @@ def make_merger_tree_graphs(trees: pd.DataFrame, subhalos: pd.DataFrame) -> list
             N_bad_stellar_mass += 1
             continue
 
-        x = torch.tensor(tree[["subhalo_loghalomass_DMO", "snapshot"]].values, dtype=torch.float)
+        x = torch.tensor(tree[["subhalo_loghalomass_DMO", "subhalo_logvmax_DMO", "is_central", "snapshot"]].values, dtype=torch.float)
         
         edges = [(s, d) for s, d in zip(tree.subhalo_tree_id.values, tree.descendent_id.values) if d != -1]
         

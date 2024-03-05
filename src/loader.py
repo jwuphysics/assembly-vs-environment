@@ -108,6 +108,9 @@ def make_cosmic_graph(subhalos: pd.DataFrame, D_link: int, periodic: bool=True) 
     edge_attr = np.append(edge_attr, atrloops, 0)
     edge_index = edge_index.astype(int)
 
+    edge_index = torch.tensor(edge_index, dtype=torch.long)
+    edge_attr = torch.tensor(edge_attr, dtype=torch.float)
+
     # optimized way to compute overdensity
     source_nodes = edge_index[0]
     target_nodes = edge_index[1]
@@ -120,10 +123,42 @@ def make_cosmic_graph(subhalos: pd.DataFrame, D_link: int, periodic: bool=True) 
         )
     )
 
+    # some distances and veldist are nan... remove them and remake graph
+    
+    masked = ~torch.isnan(edge_attr).any(1)
+    
+    edge_index = edge_index[:, masked]
+    edge_attr = edge_attr[masked]
+    
+    new_nodes = torch.unique(edge_index)
+    node_mapping = {old_idx: new_idx for new_idx, old_idx in enumerate(new_nodes.tolist())}
+    
+    edge_index_mapped = torch.tensor(
+        [
+            [
+                node_mapping[idx.item()] for idx in edge
+            ] 
+            for edge in edge_index.t()
+        ]
+    ).t()
+
+    # include is_central as node feature
+    x = torch.cat([x, is_central.type(torch.float)], axis=1)[new_nodes]
+    y = y[new_nodes]
+    pos = pos[new_nodes]
+    vel = vel[new_nodes]
+    is_central = is_central[new_nodes]
+    x_hydro = x_hydro[new_nodes]
+    pos_hydro = pos_hydro[new_nodes]
+    vel_hydro = vel_hydro[new_nodes]
+    halfmassradius = halfmassradius[new_nodes]
+    subhalo_id = subhalo_id[new_nodes]
+    overdensity = overdensity[new_nodes]
+
     data = Data(
         x=x,
-        edge_index=torch.tensor(edge_index, dtype=torch.long),
-        edge_attr=torch.tensor(edge_attr, dtype=torch.float),
+        edge_index=edge_index,
+        edge_attr=edge_attr,
         y=y,
         pos=pos,
         vel=vel,
@@ -191,7 +226,7 @@ def make_merger_tree_graphs(trees: pd.DataFrame, subhalos: pd.DataFrame) -> list
 
     print(
         N_not_in_subhalo_cat,
-        # N_is_satellite,
+        N_is_satellite,
         N_bad_stellar_mass
     )
     return graphs

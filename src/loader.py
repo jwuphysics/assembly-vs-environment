@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.data import Data
-from torch_geometric.utils import to_undirected
+from torch_geometric.utils import to_undirected, remove_self_loops
 from torch_scatter import scatter_add
 
 boxsize = (75 / 0.6774)     # box size in comoving Mpc/h
@@ -29,7 +29,7 @@ def make_cosmic_graph(subhalos: pd.DataFrame, D_link: int, periodic: bool=True) 
     x_hydro = torch.tensor(df[["subhalo_loghalomass", 'subhalo_logvmax']].values, dtype=torch.float)
 
     # hydro total stellar mass
-    y = torch.tensor(df[['subhalo_logstellarmass', 'subhalo_loggasmass', 'subhalo_logsfr', 'subhalo_gasmetallicity', 'subhalo_starmetallicity']].values, dtype=torch.float)
+    y = torch.tensor(df[['subhalo_logstellarmass']].values, dtype=torch.float) # , 'subhalo_loggasmass', 'subhalo_logsfr', 'subhalo_gasmetallicity', 'subhalo_starmetallicity'
 
     # phase space coordinates
     pos = torch.tensor(df[['subhalo_x_DMO', 'subhalo_y_DMO', 'subhalo_z_DMO']].values, dtype=torch.float)
@@ -50,6 +50,9 @@ def make_cosmic_graph(subhalos: pd.DataFrame, D_link: int, periodic: bool=True) 
 
     # add reverse pairs
     edge_index = to_undirected(torch.Tensor(edge_index).t().contiguous().type(torch.long)).numpy()
+
+    # remove self-loops
+    edge_index, _ = remove_self_loops(edge_index)
 
     # Write in pytorch-geometric format
     edge_index = edge_index.reshape((2,-1))
@@ -161,9 +164,9 @@ def make_merger_tree_graphs(trees: pd.DataFrame, subhalos: pd.DataFrame) -> list
             continue
         root_subhalo = subhalos.loc[root_subhalo_id]
 
-        if not root_subhalo.is_central:
-            N_is_satellite += 1
-            continue
+        # if not root_subhalo.is_central:
+        #     N_is_satellite += 1
+        #     continue
 
         if not np.isfinite(root_subhalo.subhalo_logstellarmass):
             N_bad_stellar_mass += 1
@@ -183,12 +186,12 @@ def make_merger_tree_graphs(trees: pd.DataFrame, subhalos: pd.DataFrame) -> list
         final_logstellarmass = torch.tensor([root_subhalo["subhalo_logstellarmass"]], dtype=torch.float)
 
         # TODO - remove snapshot number as node feature, input differences as edge features
-        graph = Data(x=x, edge_index=edge_index, y=final_logstellarmass)
+        graph = Data(x=x, edge_index=edge_index, y=final_logstellarmass, root_subhalo_id=root_subhalo_id)
         graphs.append(graph)
 
     print(
         N_not_in_subhalo_cat,
-        N_is_satellite,
+        # N_is_satellite,
         N_bad_stellar_mass
     )
     return graphs

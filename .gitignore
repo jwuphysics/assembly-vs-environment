@@ -4,4 +4,6 @@ __pycache__
 .ipynb_checkpoints
 
 *.pkl
+*.npy
+*.h5
 

@@ -20,13 +20,22 @@ def make_cosmic_graph(subhalos: pd.DataFrame, D_link: int, periodic: bool=True) 
 
     subhalo_id = torch.tensor(df.index.values, dtype=torch.long)
 
-    df.reset_index(drop=True)
+    # df.reset_index(drop=True)
 
     # DMO only properties
-    x = torch.tensor(df[['subhalo_loghalomass_DMO', 'subhalo_logvmax_DMO']].values, dtype=torch.float)
+    x = torch.tensor(
+        df[[
+            'subhalo_loghalomass_DMO', 'subhalo_logvmax_DMO', 'subhalo_logR50', 'subhalo_logMRmax', 
+            'subhalo_logVdisp', 'subhalo_logVmaxRad', 'subhalo_logspin',
+        ]].values, 
+        dtype=torch.float,
+    )
 
     # hydro properties
-    x_hydro = torch.tensor(df[["subhalo_loghalomass", 'subhalo_logvmax']].values, dtype=torch.float)
+    x_hydro = torch.tensor(
+        df[['subhalo_loghalomass', 'subhalo_logvmax']].values, 
+        dtype=torch.float,
+    )
 
     # hydro total stellar mass
     y = torch.tensor(df[['subhalo_logstellarmass']].values, dtype=torch.float) # , 'subhalo_loggasmass', 'subhalo_logsfr', 'subhalo_gasmetallicity', 'subhalo_starmetallicity'
@@ -117,7 +126,7 @@ def make_cosmic_graph(subhalos: pd.DataFrame, D_link: int, periodic: bool=True) 
     overdensity = torch.log10(
         scatter_add(
             10**(x.clone().detach()[source_nodes, 0]), 
-            index=torch.tensor(target_nodes), 
+            index=target_nodes, 
             dim=0, 
             dim_size=len(x)
         )
@@ -183,11 +192,12 @@ def make_merger_tree_graphs(trees: pd.DataFrame, subhalos: pd.DataFrame) -> list
 
     graphs = []
 
-    subhalos.set_index(["subhalo_id_DMO"], inplace=True)
+    if subhalos.index.name != "subhalo_id_DMO":
+        subhalos.set_index(["subhalo_id_DMO"], inplace=True)
+
     all_subhalo_id_DMO = set(subhalos.index.values) 
 
     N_not_in_subhalo_cat = 0
-    N_is_satellite = 0
     N_bad_stellar_mass = 0
 
     for root_descendent_id, tree in trees.groupby("root_descendent_id"):
@@ -199,21 +209,20 @@ def make_merger_tree_graphs(trees: pd.DataFrame, subhalos: pd.DataFrame) -> list
             continue
         root_subhalo = subhalos.loc[root_subhalo_id]
 
-        # if not root_subhalo.is_central:
-        #     N_is_satellite += 1
-        #     continue
-
         if not np.isfinite(root_subhalo.subhalo_logstellarmass):
             N_bad_stellar_mass += 1
             continue
 
-        x = torch.tensor(tree[["subhalo_loghalomass_DMO", "subhalo_logvmax_DMO", "is_central", "snapshot"]].values, dtype=torch.float)
+        x = torch.tensor(
+            tree[[
+                "subhalo_loghalomass_DMO", "subhalo_logvmax_DMO", "is_central", 'subhalo_logR50', 
+                'subhalo_logMRmax', 'subhalo_logVdisp', 'subhalo_logVmaxRad', 'subhalo_logspin', "snapshot"
+            ]].values, 
+            dtype=torch.float
+        )
         
         edges = [(s, d) for s, d in zip(tree.subhalo_tree_id.values, tree.descendent_id.values) if d != -1]
-        
-        # edges represented as subhalo_tree_ids (not needed)
-        # edge_ids = torch.tensor(edges, dtype=torch.long).t().contiguous()
-        
+
         # edges represented as incrementing indices (reset for each tree)
         id2idx = {id: idx for id, idx in zip(tree.subhalo_tree_id.values, np.arange(len(tree)))}
         edge_index = torch.tensor(([[id2idx[e1], id2idx[e2]] for (e1, e2) in edges]), dtype=torch.long).t().contiguous()
@@ -226,7 +235,6 @@ def make_merger_tree_graphs(trees: pd.DataFrame, subhalos: pd.DataFrame) -> list
 
     print(
         N_not_in_subhalo_cat,
-        N_is_satellite,
         N_bad_stellar_mass
     )
     return graphs

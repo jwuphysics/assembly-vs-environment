@@ -13,14 +13,14 @@ import scipy
 import tqdm
 
 
-
 ROOT = Path(__file__).parent.parent.resolve()
 tng_base_path = f"{ROOT}/illustris_data/TNG100-1"
 
-seed = 255
+seed = 42
 rng = np.random.RandomState(seed)
 random.seed(seed)
 
+np.seterr(divide='ignore')
 
 cuts = {
     "minimum_log_halo_mass": 10,
@@ -233,7 +233,6 @@ def load_trees(cuts=cuts) -> pd.DataFrame:
                 "RootDescendantID": "root_descendent_id",
                 "SnapNum": "snapshot",
                 "SubhaloID": "subhalo_tree_id",
-                "GroupFirstSub": "is_central",
                 "SubhaloVelDisp": "subhalo_Vdisp",
                 "SubhaloVmaxRad": "subhalo_VmaxRad",
             },

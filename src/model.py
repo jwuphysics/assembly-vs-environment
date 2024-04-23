@@ -168,6 +168,10 @@ class SAGEGraphConvNet(torch.nn.Module):
 
 class MultiSAGENet(torch.nn.Module):
     """A multi-layer GNN built using SAGEConv layers.
+
+    Makes full graph-level predictions (i.e. one for each merger tree). 
+
+    TODO: implement edge features...
     """
     def __init__(
         self, 
@@ -175,7 +179,7 @@ class MultiSAGENet(torch.nn.Module):
         n_hidden=16, 
         n_out=1, 
         n_layers=4, 
-        aggr=["max", "mean"]
+        aggr=["max", "sum", "mean"]
     ):
         super(MultiSAGENet, self).__init__()
 
@@ -188,7 +192,7 @@ class MultiSAGENet(torch.nn.Module):
         sage_convs = [SAGEConv(self.n_in, self.n_hidden, aggr=self.aggr)]                
         sage_convs += [SAGEConv(self.n_hidden, self.n_hidden, aggr=self.aggr) for _ in range(self.n_layers - 1)]
         self.convs = nn.ModuleList(sage_convs)
-        
+
         self.mlp = nn.Sequential(
             nn.Linear(self.n_hidden, 4 * self.n_hidden, bias=True),
             nn.SiLU(),
@@ -203,18 +207,18 @@ class MultiSAGENet(torch.nn.Module):
         )
 
     def forward(self, data):
-        x, edge_index = data.x, data.edge_index
+        x, edge_index, batch = data.x, data.edge_index, data.batch
 
-        for conv in self.convs:
+        for i, conv in enumerate(self.convs):
             x = conv(x, edge_index)
             x = F.silu(x)
 
         x = self.mlp(x)
  
         out = torch.cat([
-            global_mean_pool(x, data.batch),
-            global_max_pool(x, data.batch), 
-            global_add_pool(x, data.batch)
+            global_mean_pool(x, batch),
+            global_max_pool(x, batch), 
+            global_add_pool(x, batch)
         ], axis=1)
               
         return self.readout(out)

@@ -108,7 +108,8 @@ def validate(dataloader, model, device):
     )
 
 
-def main():
+def predict_mlp():
+    """Main training loop for MLP estimates (only halo properties)"""
     with open(f'{results_dir}/cosmic_graphs.pkl', 'rb') as f:
         data = pickle.load(f)
 
@@ -152,7 +153,8 @@ def main():
             weight_decay=wd
         )
         
-        print(f"Epoch    Train loss   Valid Loss      RSME ")
+        log_file = open(f"{ROOT}/logs/train_mlp.centrals.log", "a")
+        log_file.write(f"Epoch    Train loss   Valid Loss      RSME \n")
         t0 = time.time()
         for epoch in range(n_epochs):
         
@@ -164,7 +166,8 @@ def main():
             valid_losses.append(valid_loss)
             if (epoch + 1) % 10 == 0:
                 t1 = time.time()
-                print(f"{epoch + 1: >4d}    {train_loss: >9.5f}    {valid_loss: >9.5f}    {np.sqrt(np.mean((preds - trues.flatten())**2)): >10.6f}      {t1-t0:.2f}s")
+                log_file.write(f"{epoch + 1: >4d}    {train_loss: >9.5f}    {valid_loss: >9.5f}    {np.sqrt(np.mean((preds - trues.flatten())**2)): >10.6f}      {t1-t0:.2f}s\n")
+                log_file.flush()
                 t0 = time.time()
             
         results = pd.DataFrame({
@@ -172,5 +175,20 @@ def main():
             "p_haloonly_dmo": np.array(preds).reshape(-1),
             "log_Mstar": np.array(trues).reshape(-1),
         })
+        log_file.close()
     
         results.to_csv(f"{results_dir}/predictions-halo_only-{k+1}of{K}.csv", index=False)
+
+def combine_validation_experiments():
+    pm1 = pd.read_csv(f"{results_dir}/predictions-halo_only-1of3.csv", index_col="subhalo_id")
+    pm1["k"] = 1
+    pm2 = pd.read_csv(f"{results_dir}/predictions-halo_only-2of3.csv", index_col="subhalo_id")
+    pm2["k"] = 2
+    pm3 = pd.read_csv(f"{results_dir}/predictions-halo_only-3of3.csv", index_col="subhalo_id")
+    pm3["k"] = 3
+    preds_env = pd.concat([pm1, pm2, pm3])
+    preds_env.to_csv(f"{results_dir}/predictions-halo_only.csv")
+
+if __name__ == "__main__":
+    #predict_mlp()
+    combine_validation_experiments()

@@ -16,6 +16,8 @@ from typing import List
 
 from data import *
 
+np.seterr(divide='ignore')
+
 ROOT = Path(__file__).parent.parent.resolve()
 results_dir = ROOT / "results"
 

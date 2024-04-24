@@ -29,7 +29,7 @@ device = "cuda"
 #######################
 ### HYPERPARAMETERS ###
 #######################
-minimum_root_stellar_mass = 8.75
+minimum_root_stellar_mass = 8.5
 only_centrals = True
 
 n_epochs = 500
@@ -38,8 +38,9 @@ batch_size = 128
 lr = 1e-2
 wd = 1e-4
 
-n_layers = 4
-n_hidden = 4
+n_layers = 8
+n_hidden = 8
+bias=False
 
 seed = 42
 K = 3
@@ -114,6 +115,7 @@ class MultiSAGENet(torch.nn.Module):
         n_hidden=16, 
         n_out=1, 
         n_layers=4, 
+        bias=True,
         aggr=["max", "mean"]
     ):
         super(MultiSAGENet, self).__init__()
@@ -123,22 +125,17 @@ class MultiSAGENet(torch.nn.Module):
         self.n_out = n_out
         self.n_layers = n_layers
         self.aggr = aggr
+        self.bias = bias
 
-        sage_convs = [SAGEConv(self.n_in, self.n_hidden, aggr=self.aggr)]                
-        sage_convs += [SAGEConv(self.n_hidden, self.n_hidden, aggr=self.aggr) for _ in range(self.n_layers - 1)]
+        sage_convs = [SAGEConv(self.n_in, self.n_hidden, bias=self.bias, aggr=self.aggr)]                
+        sage_convs += [SAGEConv(self.n_hidden, self.n_hidden, bias=self.bias, aggr=self.aggr) for _ in range(self.n_layers - 1)]
         self.convs = nn.ModuleList(sage_convs)
         
-        self.mlp = nn.Sequential(
-            nn.Linear(self.n_hidden, 4 * self.n_hidden, bias=True),
-            nn.SiLU(),
-            nn.LayerNorm(4 * self.n_hidden),
-            nn.Linear(4 * self.n_hidden, self.n_hidden, bias=True)
-        )
         self.readout = nn.Sequential(
-            nn.Linear(3 * (self.n_layers * self.n_hidden + self.n_in), 4 * self.n_hidden, bias=True),
+            nn.Linear(3 * (self.n_layers * self.n_hidden + self.n_in), 4 * self.n_hidden, bias=self.bias),
             nn.SiLU(),
             nn.LayerNorm(4 * self.n_hidden),
-            nn.Linear(4 * self.n_hidden, 2 * self.n_out, bias=True)
+            nn.Linear(4 * self.n_hidden, 2 * self.n_out, bias=self.bias)
         )
 
     def forward(self, data):
@@ -285,7 +282,7 @@ def kfold_validate_trees():
         train_loader = DataLoader(list(compress(trees, train_mask)), batch_size=batch_size, shuffle=True, pin_memory=True)
         valid_loader = DataLoader(list(compress(trees, valid_mask)), batch_size=batch_size, shuffle=False, pin_memory=True)
     
-        model = MultiSAGENet(n_in=8, n_hidden=n_hidden, n_layers=n_layers, n_out=1).to(device)
+        model = MultiSAGENet(n_in=8, n_hidden=n_hidden, n_layers=n_layers, bias=bias, n_out=1).to(device)
         # model = GCN(n_in=8, hidden_channels=128, n_out=1).to(device)
         
         train_losses = []
@@ -321,21 +318,26 @@ def kfold_validate_trees():
         })
     
         results.to_csv(f"{results_dir}/predictions-mergertreeGNN-{k+1}of{K}.csv", index=False)
+        
+        model_fname = f"{results_dir}/models/merger_trees-mass_gt_{minimum_root_stellar_mass:g}-only_centrals_{int(only_centrals)}-{k+1}of{K}.pth"
+        torch.save(model.state_dict(), model_fname)
 
-def combine_validation_experiments():
-    pm1 = pd.read_csv(f"{results_dir}/predictions-mergertreeGNN-1of3.csv", index_col="root_subhalo_ids")
+def combine_validation_experiments(base_name="predictions-mergertreeGNN"):
+    pm1 = pd.read_csv(f"{results_dir}/{base_name}-1of3.csv")
     pm1["k"] = 1
-    pm2 = pd.read_csv(f"{results_dir}/predictions-mergertreeGNN-2of3.csv", index_col="root_subhalo_ids")
+    pm2 = pd.read_csv(f"{results_dir}/{base_name}-2of3.csv")
     pm2["k"] = 2
-    pm3 = pd.read_csv(f"{results_dir}/predictions-mergertreeGNN-3of3.csv", index_col="root_subhalo_ids")
+    pm3 = pd.read_csv(f"{results_dir}/{base_name}-3of3.csv")
     pm3["k"] = 3
     preds_env = pd.concat([pm1, pm2, pm3])
-    preds_env.to_csv(f"{results_dir}/predictions-mergertree_GNN.csv")
+    preds_env.to_csv(f"{results_dir}/{base_name}.csv", index=False)
 
 
-def predict_env_gnn_residuals():
+def predict_env_gnn_residuals(n_residual_training_epochs=100):
     """Assuming an environmental graph has already been trained, now compute residuals
     from those env predictions and regress them using a merger tree GNN.
+
+    Uses the same k-fold split as the env GNN trained on.
     """
     try:
         preds_env = pd.read_csv(f"{results_dir}/predictions-environment_GNN.csv")
@@ -349,7 +351,11 @@ def predict_env_gnn_residuals():
     with open(f"{results_dir}/merger_trees.pkl", "rb") as f:
         trees = pickle.load(f)
     
-    trees = [tree for tree in trees if tree.y > minimum_root_stellar_mass]
+    # impose mass cut for convenience
+    if only_centrals:
+        trees = [tree for tree in trees if ((tree.is_central) & (tree.y > minimum_root_stellar_mass))]
+    else: 
+        trees = [tree for tree in trees if tree.y > minimum_root_stellar_mass]
     
     for tree in trees:
         tree.log_Mstar = tree.y # hang on to this
@@ -365,7 +371,7 @@ def predict_env_gnn_residuals():
         train_loader = DataLoader(list(compress(trees, train_mask)), batch_size=batch_size, shuffle=True, pin_memory=True)
         valid_loader = DataLoader(list(compress(trees, valid_mask)), batch_size=batch_size, shuffle=False, pin_memory=True)
     
-        model = MultiSAGENet(n_in=8, n_hidden=n_hidden, n_layers=n_layers, n_out=1).to(device)
+        model = MultiSAGENet(n_in=8, n_hidden=n_hidden, n_layers=n_layers, bias=bias, n_out=1).to(device)
         
         train_losses = []
         valid_losses = []
@@ -379,8 +385,8 @@ def predict_env_gnn_residuals():
         valid_loss, p, y, root_subhalo_id = validate(valid_loader, model, device=device)
         log_file.write(f"Initial residual scatter (fold {k+1}): {y.std(): >10.6f}\n")
         
-        log_file(f"Epoch    Train loss   Valid Loss       RSME      time\n")
-        for epoch in range(n_epochs):
+        log_file.write(f"Epoch    Train loss   Valid Loss       RSME      time\n")
+        for epoch in range(n_residual_training_epochs):
     
             t0 = time.time()
                 
@@ -393,16 +399,24 @@ def predict_env_gnn_residuals():
             log_file.flush()
             train_losses.append(train_loss)
             valid_losses.append(valid_loss)
-    
+
         results = pd.DataFrame({
             "root_subhalo_id": np.array(root_subhalo_id),
             "p_mergertree_on_residual": p,
             "residual_envGNN": y,
         })
-    
+
         results.to_csv(f"{results_dir}/predictions_envGNN_residuals-mergertreeGNN-{k+1}of{K}.csv", index=False)
 
-if __name__ == "__main__":
-    kfold_validate_trees()
-    combine_validation_experiments()
+        model_fname = f"{results_dir}/models/train_env-gnn-residuals_merger_trees-{k+1}of{K}.pth"
+        torch.save(model.state_dict(), model_fname)
+        
 
+if __name__ == "__main__":
+    # train and cross-validate trees
+    # kfold_validate_trees()
+    # combine_validation_experiments()
+
+    # assuming that the env GNN has already been trained, now train a merger tree to regress pred_envGNN_logMstar - true_logMstar
+    # predict_env_gnn_residuals(n_residual_training_epochs=100)
+    combine_validation_experiments(base_name="predictions_envGNN_residuals-mergertreeGNN")

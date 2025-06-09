@@ -2,8 +2,10 @@ illustris_data
 results
 __pycache__
 .ipynb_checkpoints
+scratch
+logs
 
 *.pkl
 *.npy
 *.h5
-
+*.parquet

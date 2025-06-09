@@ -1,0 +1,22 @@
+# Core scientific computing
+numpy>=1.21.0
+pandas>=1.3.0
+scipy>=1.7.0
+
+# Machine learning and deep learning
+torch>=2.0.0
+torch-geometric>=2.3.0
+torch-scatter>=2.1.0
+scikit-learn>=1.0.0
+
+# Data handling and I/O
+h5py>=3.7.0
+astropy>=5.0.0
+tqdm>=4.64.0
+
+# Optional dependencies for specific features
+matplotlib>=3.5.0  # for visualization scripts
+networkx>=2.8.0    # for graph operations in loader.py
+
+# Note: illustris_python should be installed separately from the official repository
+# pip install git+https://github.com/illustris/illustris_python.git

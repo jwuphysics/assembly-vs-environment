@@ -168,6 +168,8 @@ class SAGEGraphConvNet(torch.nn.Module):
 
 class MultiSAGENet(torch.nn.Module):
     """A multi-layer GNN built using SAGEConv layers.
+
+    Makes full graph-level predictions (i.e. one for each merger tree)
     """
     def __init__(
         self, 
@@ -175,6 +177,7 @@ class MultiSAGENet(torch.nn.Module):
         n_hidden=16, 
         n_out=1, 
         n_layers=4, 
+        bias=True,
         aggr=["max", "mean"]
     ):
         super(MultiSAGENet, self).__init__()
@@ -184,37 +187,40 @@ class MultiSAGENet(torch.nn.Module):
         self.n_out = n_out
         self.n_layers = n_layers
         self.aggr = aggr
+        self.bias = bias
 
-        sage_convs = [SAGEConv(self.n_in, self.n_hidden, aggr=self.aggr)]                
-        sage_convs += [SAGEConv(self.n_hidden, self.n_hidden, aggr=self.aggr) for _ in range(self.n_layers - 1)]
+        sage_convs = [SAGEConv(self.n_in, self.n_hidden, bias=self.bias, aggr=self.aggr)]                
+        sage_convs += [SAGEConv(self.n_hidden, self.n_hidden, bias=self.bias, aggr=self.aggr) for _ in range(self.n_layers - 1)]
         self.convs = nn.ModuleList(sage_convs)
         
-        self.mlp = nn.Sequential(
-            nn.Linear(self.n_hidden, 4 * self.n_hidden, bias=True),
-            nn.SiLU(),
-            nn.LayerNorm(4 * self.n_hidden),
-            nn.Linear(4 * self.n_hidden, self.n_hidden, bias=True)
-        )
         self.readout = nn.Sequential(
-            nn.Linear(3 * self.n_hidden, 4 * self.n_hidden, bias=True),
+            nn.Linear(3 * (self.n_layers * self.n_hidden + self.n_in), 4 * self.n_hidden, bias=self.bias),
             nn.SiLU(),
             nn.LayerNorm(4 * self.n_hidden),
-            nn.Linear(4 * self.n_hidden, 2 * self.n_out, bias=True)
+            nn.Linear(4 * self.n_hidden, 2 * self.n_out, bias=self.bias)
         )
 
     def forward(self, data):
         x, edge_index = data.x, data.edge_index
 
+        out = [
+            torch.cat([
+                global_mean_pool(x, data.batch),
+                global_max_pool(x, data.batch), 
+                global_add_pool(x, data.batch)
+            ], axis=1)
+        ]
+        
         for conv in self.convs:
             x = conv(x, edge_index)
             x = F.silu(x)
 
-        x = self.mlp(x)
- 
-        out = torch.cat([
-            global_mean_pool(x, data.batch),
-            global_max_pool(x, data.batch), 
-            global_add_pool(x, data.batch)
-        ], axis=1)
+            out += [
+                torch.cat([
+                    global_mean_pool(x, data.batch),
+                    global_max_pool(x, data.batch), 
+                    global_add_pool(x, data.batch)
+                ], axis=1)
+            ]
               
-        return self.readout(out)
+        return self.readout(torch.cat(out, axis=1))

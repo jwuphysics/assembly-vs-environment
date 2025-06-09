@@ -6,43 +6,16 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch_geometric.loader import DataLoader
-from scipy.stats import binned_statistic, median_abs_deviation
 from sklearn.model_selection import KFold
 
 from model import SAGEGraphConvNet, EdgeInteractionGNN
 from data import prepare_subhalos, load_trees, make_merger_tree_graphs 
+from training_utils import get_device, train_epoch_geometric, validate_geometric
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+device = get_device()
 
-def train(dataloader, model, optimizer, device="cuda"):
-    model.train()
-    loss_total = 0
-    for data in dataloader:
-        data.to(device)       
-        optimizer.zero_grad()
-        y_pred = model(data)
-        loss = F.mse_loss(y_pred, data.y)
-        loss.backward()
-        optimizer.step()
-        loss_total += loss.item()
-    return loss_total / len(dataloader)
-
-def validate(dataloader, model, device="cuda"):
-    model.eval()
-    loss_total = 0
-    y_preds = []
-    y_trues = []
-    for data in dataloader:
-        data.to(device)
-        with torch.no_grad():
-            y_pred = model(data)
-            loss = F.mse_loss(y_pred, data.y)
-            loss_total += loss.item()
-            y_preds += list(y_pred.detach().cpu().numpy())
-            y_trues += list(data.y.detach().cpu().numpy())
-    y_preds = np.array(y_preds)
-    y_trues = np.array(y_trues)
-    return loss_total / len(dataloader), y_preds, y_trues
+# Train and validate functions moved to training_utils.py
+# Note: These were simplified versions that used MSE loss instead of Gaussian NLL
 
 def train_merger_tree(model=None, n_epochs=100, K=5):
     with open("merger_trees.pkl", "rb") as f:

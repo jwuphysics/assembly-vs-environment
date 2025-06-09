@@ -1,29 +1,31 @@
-import schedulefree
 import sys
 import torch
 import torch.nn.functional as F
 from torch_geometric.data import Data
-from torch_geometric.loader import DataLoader, ClusterData, ClusterLoader
-from torch_geometric.nn import global_mean_pool, global_max_pool, global_add_pool, SAGEConv, DirGNNConv
-from torch_geometric.utils import remove_self_loops
+from torch_geometric.loader import ClusterData, ClusterLoader
+import numpy as np
+import pandas as pd
 
 from data import *
 from loader import *
-from model import *
+from model import EdgeInteractionGNN
+from training_utils import (
+    TrainingLogger,
+    train_epoch_geometric,
+    validate_geometric,
+    combine_kfold_results,
+    get_device,
+    configure_optimizer
+)
 
-import matplotlib.pyplot as plt
 import pickle
-import random
-from itertools import compress
-from sklearn.model_selection import KFold
-from scipy.stats import binned_statistic, median_abs_deviation
 import time
 
 from pathlib import Path
 ROOT = Path(__file__).parent.parent.resolve()
 results_dir = ROOT / "results"
 
-device = "cuda"
+device = get_device()
 
 #######################
 ### HYPERPARAMETERS ###
@@ -79,106 +81,12 @@ def get_train_valid_indices(data, k, K=3, boxsize=75/0.6774, pad=3, epsilon=1e-1
     return train_indices, valid_indices
 
 
-def train(dataloader, model, optimizer, device, augment=True):
-    """Train GNN model using Gaussian NLL loss."""
-    model.train()
-
-    loss_total = 0
-    for data in (dataloader):
-        if augment: # add random noise
-            data_node_features_scatter = 3e-3 * torch.randn_like(data.x[:, :-2]) * torch.std(data.x[:, :-2], dim=0)
-            data_edge_features_scatter = 3e-3 * torch.randn_like(data.edge_attr) * torch.std(data.edge_attr, dim=0)
-            
-            data.x[:, :-2] += data_node_features_scatter
-            data.edge_attr += data_edge_features_scatter
-
-            assert not torch.isnan(data.x).any() 
-            assert not torch.isnan(data.edge_attr).any() 
-
-        data.to(device)
-
-        optimizer.zero_grad()
-        y_pred, logvar_pred = model(data).chunk(2, dim=1)
-        assert not torch.isnan(y_pred).any() and not torch.isnan(logvar_pred).any()
-
-        y_pred = y_pred.view(-1, model.n_out)
-        logvar_pred = logvar_pred.mean()
-        loss = 0.5 * (F.mse_loss(y_pred, data.y) / 10**logvar_pred + logvar_pred)
-
-        loss.backward()
-        optimizer.step()
-        loss_total += loss.item()
-
-    return loss_total / len(dataloader)
+# Train function moved to training_utils.py
 
 
-def validate(dataloader, model, device):
-    model.eval()
-
-    loss_total = 0
-
-    y_preds = []
-    y_trues = []
-    subhalo_ids = []
-
-    is_central = []
-
-    for data in (dataloader):
-        with torch.no_grad():
-            data.to(device)
-            y_pred, logvar_pred = model(data).chunk(2, dim=1)
-            y_pred = y_pred.view(-1, model.n_out)
-            logvar_pred = logvar_pred.mean()
-            loss = 0.5 * (F.mse_loss(y_pred, data.y) / 10**logvar_pred + logvar_pred)
-
-            loss_total += loss.item()
-            y_preds += list(y_pred.detach().cpu().numpy())
-            y_trues += list(data.y.detach().cpu().numpy())
-            subhalo_ids += list(data.idx.detach().cpu().numpy())
-            is_central += list(data.is_central.detach().cpu().numpy())
-
-    y_preds = np.concatenate(y_preds)
-    y_trues = np.array(y_trues)
-    subhalo_ids = np.array(subhalo_ids)
-
-    return (
-        loss_total / len(dataloader),
-        y_preds,
-        y_trues,
-        subhalo_ids,
-        is_central,
-    )
+# Validate function moved to training_utils.py
     
-def configure_optimizer(model, lr, wd,):
-    """Only apply weight decay to weights, but not to other
-    parameters like biases or LayerNorm. Based on minGPT version.
-    """
-
-    decay, no_decay = set(), set()
-    yes_wd_modules = (nn.Linear, )
-    no_wd_modules = (nn.LayerNorm, )
-    for mn, m in model.named_modules():
-        for pn, p in m.named_parameters():
-            fpn = '%s.%s' % (mn, pn) if mn else pn
-            if pn.endswith('bias'):
-                no_decay.add(fpn)
-            elif pn.endswith('weight') and isinstance(m, yes_wd_modules):
-                decay.add(fpn)
-            elif pn.endswith('weight') and isinstance(m, no_wd_modules):
-                no_decay.add(fpn)
-    param_dict = {pn: p for pn, p in model.named_parameters()}
-
-    optim_groups = [
-        {"params": [param_dict[pn] for pn in sorted(list(decay))], "weight_decay": wd},
-        {"params": [param_dict[pn] for pn in sorted(list(no_decay))], "weight_decay": 0.},
-    ]
-
-    optimizer = torch.optim.AdamW(
-        optim_groups, 
-        lr=lr, 
-    )
-
-    return optimizer
+# configure_optimizer function moved to training_utils.py
 
 def kfold_validate_graphs():
     with open(f'{results_dir}/cosmic_graphs.pkl', 'rb') as f:
@@ -245,8 +153,8 @@ def kfold_validate_graphs():
             elif epoch == (n_epochs * 0.75):
                 optimizer = configure_optimizer(model, lr/125, wd)
         
-            train_loss = train(train_loader, model, optimizer, device)
-            valid_loss, p, y, *_  = validate(valid_loader, model, device)
+            train_loss = train_epoch_geometric(train_loader, model, optimizer, device, augment=True, augment_strength=3e-3, augment_edges=True)
+            valid_loss, p, y, *_  = validate_geometric(valid_loader, model, device, return_ids=True, return_centrals=True)
         
             train_losses.append(train_loss)
             valid_losses.append(valid_loss)
@@ -260,7 +168,7 @@ def kfold_validate_graphs():
         log_file.close()
         
         # save predictions
-        valid_loss, p, y, valid_idxs, _  = validate(valid_loader, model, device)
+        valid_loss, p, y, valid_idxs, _  = validate_geometric(valid_loader, model, device, return_ids=True, return_centrals=True)
         
         # helper function to select the validation indices for 1-d tensors in `data`
         # and return as numpy
@@ -306,14 +214,8 @@ def kfold_validate_graphs():
 
 
 def combine_validation_experiments():
-    pe1 = pd.read_csv(f"{results_dir}/predictions-envGNN-1of3.csv", index_col="subhalo_id")
-    pe1["k"] = 1
-    pe2 = pd.read_csv(f"{results_dir}/predictions-envGNN-2of3.csv", index_col="subhalo_id")
-    pe2["k"] = 2
-    pe3 = pd.read_csv(f"{results_dir}/predictions-envGNN-3of3.csv", index_col="subhalo_id")
-    pe3["k"] = 3
-    preds_env = pd.concat([pe1, pe2, pe3])
-    preds_env.to_csv(f"{results_dir}/predictions-environment_GNN.csv")
+    """Combine k-fold validation results - wrapper for utility function."""
+    return combine_kfold_results(results_dir, "predictions-envGNN", K)
 
 
 if __name__ == "__main__":

@@ -3,27 +3,33 @@ import sys
 import torch
 import torch.nn.functional as F
 from torch_geometric.data import Data
-from torch_geometric.loader import DataLoader, ClusterData, ClusterLoader
-from torch_geometric.nn import global_mean_pool, global_max_pool, global_add_pool, SAGEConv, DirGNNConv
-from torch_geometric.utils import remove_self_loops
+from torch_geometric.loader import DataLoader
+from torch_geometric.nn import global_mean_pool, global_max_pool, global_add_pool, SAGEConv
+import numpy as np
+import pandas as pd
 
 from data import *
 from loader import *
-from model import *
+from model import MultiSAGENet
+from training_utils import (
+    TrainingLogger, 
+    train_epoch_geometric, 
+    validate_geometric, 
+    combine_kfold_results,
+    get_device,
+    configure_optimizer
+)
 
-import matplotlib.pyplot as plt
 import pickle
 import random
 from itertools import compress
-from sklearn.model_selection import KFold
-from scipy.stats import binned_statistic, median_abs_deviation
 import time
 
 from pathlib import Path
 ROOT = Path(__file__).parent.parent.resolve()
 results_dir = ROOT / "results"
 
-device = "cuda"
+device = get_device()
 
 
 #######################
@@ -45,216 +51,16 @@ bias=False
 seed = 42
 K = 3
 
-class MangroveGCN(torch.nn.Module):
-    """NOT USED -- SAGEConv net from Mangrove"""
-    def __init__(self, n_in=9, hidden_channels=64, n_out=1, nlin=3):
-        super(MangroveGCN, self).__init__()
-        self.n_in = n_in
-        self.n_hidden = hidden_channels
-        self.n_out = n_out
-                 
-        self.node_enc = MangroveMLP(n_in, hidden_channels, layer_norm=True)
+# Unused classes removed - they were not being used in the training pipeline
+
+# MultiSAGENet is now imported from model.py to avoid duplication
         
-        self.conv1 = SAGEConv(hidden_channels, hidden_channels) 
-        
-        self.conv2 = SAGEConv(hidden_channels, hidden_channels)
-        self.conv3 = SAGEConv(hidden_channels, hidden_channels)
-        self.conv4 = SAGEConv(hidden_channels, hidden_channels)
-        self.conv5 = SAGEConv(hidden_channels, hidden_channels)
-        
-        self.lin = nn.Linear(2*hidden_channels, hidden_channels)
-        self.norm = nn.LayerNorm(normalized_shape=hidden_channels)
-        self.lin_f = nn.Linear(hidden_channels, 2*n_out)
-        
-    def forward(self, data):
-        x, edge_index, batch = data.x, data.edge_index, data.batch
-
-        # 1. Obtain node embeddings 
-        x = self.node_enc(x)
-        x = self.conv1(x, edge_index)
-        x = x.relu()
-        x = self.conv2(x, edge_index)
-        x = x.relu()
-        x = self.conv3(x, edge_index)
-        x = x.relu()
-        x = self.conv4(x, edge_index)
-        x = x.relu()
-        x = self.conv5(x, edge_index)
-        x = x.relu()
-        x = torch.cat([global_max_pool(x, batch),global_add_pool(x, batch)], 1) 
-
-        x = self.lin(x)
-        x = x.relu()
-        x = self.lin_f(self.norm(x))
-        return x
-
-class MangroveMLP(nn.Module):
-    """NOT USED -- helper class for Mangrove GCN"""
-    def __init__(self, n_in, n_out, hidden=64, nlayers=2, layer_norm=True):
-        super(MangroveMLP, self).__init__()
-        layers = [nn.Linear(n_in, hidden), nn.ReLU()]
-        for i in range(nlayers):
-            layers.append(nn.Linear(hidden, hidden))
-            layers.append(nn.ReLU()) 
-        if layer_norm:
-            layers.append(nn.LayerNorm(hidden))
-        layers.append(nn.Linear(hidden, n_out))
-        self.mlp = nn.Sequential(*layers)
-
-    def forward(self, x):
-        return self.mlp(x)
-
-class MultiSAGENet(torch.nn.Module):
-    """A multi-layer GNN built using SAGEConv layers.
-
-    Makes full graph-level predictions (i.e. one for each merger tree)
-    """
-    def __init__(
-        self, 
-        n_in=4, 
-        n_hidden=16, 
-        n_out=1, 
-        n_layers=4, 
-        bias=True,
-        aggr=["max", "mean"]
-    ):
-        super(MultiSAGENet, self).__init__()
-
-        self.n_in = n_in
-        self.n_hidden = n_hidden
-        self.n_out = n_out
-        self.n_layers = n_layers
-        self.aggr = aggr
-        self.bias = bias
-
-        sage_convs = [SAGEConv(self.n_in, self.n_hidden, bias=self.bias, aggr=self.aggr)]                
-        sage_convs += [SAGEConv(self.n_hidden, self.n_hidden, bias=self.bias, aggr=self.aggr) for _ in range(self.n_layers - 1)]
-        self.convs = nn.ModuleList(sage_convs)
-        
-        self.readout = nn.Sequential(
-            nn.Linear(3 * (self.n_layers * self.n_hidden + self.n_in), 4 * self.n_hidden, bias=self.bias),
-            nn.SiLU(),
-            nn.LayerNorm(4 * self.n_hidden),
-            nn.Linear(4 * self.n_hidden, 2 * self.n_out, bias=self.bias)
-        )
-
-    def forward(self, data):
-        x, edge_index = data.x, data.edge_index
-
-        out = [
-            torch.cat([
-                global_mean_pool(x, data.batch),
-                global_max_pool(x, data.batch), 
-                global_add_pool(x, data.batch)
-            ], axis=1)
-        ]
-        
-        for conv in self.convs:
-            x = conv(x, edge_index)
-            x = F.silu(x)
-
-            out += [
-                torch.cat([
-                    global_mean_pool(x, data.batch),
-                    global_max_pool(x, data.batch), 
-                    global_add_pool(x, data.batch)
-                ], axis=1)
-            ]
-              
-        return self.readout(torch.cat(out, axis=1))
-        
-def train(dataloader, model, optimizer, device="cuda", augment_noise=True):
-    """Train GNN model using Gaussian NLL loss."""
-    model.train()
-
-    loss_total = 0
-    for data in (dataloader):
-        if augment_noise: 
-            # add random noise to halo mass and vmax
-            data_node_features_scatter = 3e-4 * torch.randn_like(data.x[:, :-2]) * torch.std(data.x[:, :-2], dim=0)
-            data.x[:, :-2] += data_node_features_scatter
-            assert not torch.isnan(data.x).any() 
-
-        data.to(device)
-
-        optimizer.zero_grad()
-        y_pred, logvar_pred = model(data).chunk(2, dim=1)
-        assert not torch.isnan(y_pred).any() and not torch.isnan(logvar_pred).any()
-
-        y_pred = y_pred.view(-1, model.n_out)
-        logvar_pred = logvar_pred.mean()
-        loss = 0.5 * (F.mse_loss(y_pred.view(-1), data.y) / 10**logvar_pred + logvar_pred)
-
-        loss.backward()
-        optimizer.step()
-        loss_total += loss.item()
-
-    return loss_total / len(dataloader)
+# Train function moved to training_utils.py
 
 
-def validate(dataloader, model, device="cuda"):
-    model.eval()
+# Validate function moved to training_utils.py
 
-    loss_total = 0
-
-    y_preds = []
-    y_trues = []
-    root_subhalo_ids = []
-
-    for data in (dataloader):
-        with torch.no_grad():
-            data.to(device)
-            y_pred, logvar_pred = model(data).chunk(2, dim=1)
-            y_pred = y_pred.view(-1, model.n_out)
-            logvar_pred = logvar_pred.mean()
-            loss = 0.5 * (F.mse_loss(y_pred.view(-1), data.y) / 10**logvar_pred + logvar_pred)
-
-            loss_total += loss.item()
-            y_preds += list(y_pred.detach().cpu().numpy())
-            y_trues += list(data.y.detach().cpu().numpy())
-            root_subhalo_ids += data.root_subhalo_id
-
-    y_preds = np.concatenate(y_preds)
-    y_trues = np.array(y_trues)
-    root_subhalo_ids = np.array(root_subhalo_ids)
-
-    return (
-        loss_total / len(dataloader),
-        y_preds,
-        y_trues,
-        root_subhalo_ids,
-    )
-
-def configure_optimizer(model, lr, wd,):
-    """Only apply weight decay to weights, but not to other
-    parameters like biases or LayerNorm. Based on minGPT version.
-    """
-
-    decay, no_decay = set(), set()
-    yes_wd_modules = (nn.Linear, )
-    no_wd_modules = (nn.LayerNorm, )
-    for mn, m in model.named_modules():
-        for pn, p in m.named_parameters():
-            fpn = '%s.%s' % (mn, pn) if mn else pn
-            if pn.endswith('bias'):
-                no_decay.add(fpn)
-            elif pn.endswith('weight') and isinstance(m, yes_wd_modules):
-                decay.add(fpn)
-            elif pn.endswith('weight') and isinstance(m, no_wd_modules):
-                no_decay.add(fpn)
-    param_dict = {pn: p for pn, p in model.named_parameters()}
-
-    optim_groups = [
-        {"params": [param_dict[pn] for pn in sorted(list(decay))], "weight_decay": wd},
-        {"params": [param_dict[pn] for pn in sorted(list(no_decay))], "weight_decay": 0.},
-    ]
-
-    optimizer = torch.optim.AdamW(
-        optim_groups, 
-        lr=lr, 
-    )
-
-    return optimizer
+# configure_optimizer function moved to training_utils.py
 
 def kfold_validate_trees():
     # use full trees: pruned versions don't do as well
@@ -299,8 +105,8 @@ def kfold_validate_trees():
     
             t0 = time.time()
                 
-            train_loss = train(train_loader, model, optimizer, device=device)
-            valid_loss, p, y, root_subhalo_ids = validate(valid_loader, model, device=device)
+            train_loss = train_epoch_geometric(train_loader, model, optimizer, device, augment_strength=3e-4, augment_edges=False)
+            valid_loss, p, y, root_subhalo_ids = validate_geometric(valid_loader, model, device, return_ids=True, return_centrals=False)
         
             t1 = time.time()
         
@@ -323,14 +129,8 @@ def kfold_validate_trees():
         torch.save(model.state_dict(), model_fname)
 
 def combine_validation_experiments(base_name="predictions-mergertreeGNN"):
-    pm1 = pd.read_csv(f"{results_dir}/{base_name}-1of3.csv")
-    pm1["k"] = 1
-    pm2 = pd.read_csv(f"{results_dir}/{base_name}-2of3.csv")
-    pm2["k"] = 2
-    pm3 = pd.read_csv(f"{results_dir}/{base_name}-3of3.csv")
-    pm3["k"] = 3
-    preds_env = pd.concat([pm1, pm2, pm3])
-    preds_env.to_csv(f"{results_dir}/{base_name}.csv", index=False)
+    """Combine k-fold validation results - wrapper for utility function."""
+    return combine_kfold_results(results_dir, base_name, K)
 
 
 def predict_env_gnn_residuals(n_residual_training_epochs=100):
@@ -382,7 +182,7 @@ def predict_env_gnn_residuals(n_residual_training_epochs=100):
         log_file = open(f"{ROOT}/logs/train_env-gnn-residuals_merger_trees.log", "a")
         
         # what's the baseline error?
-        valid_loss, p, y, root_subhalo_id = validate(valid_loader, model, device=device)
+        valid_loss, p, y, root_subhalo_id = validate_geometric(valid_loader, model, device, return_ids=True, return_centrals=False)
         log_file.write(f"Initial residual scatter (fold {k+1}): {y.std(): >10.6f}\n")
         
         log_file.write(f"Epoch    Train loss   Valid Loss       RSME      time\n")
@@ -390,8 +190,8 @@ def predict_env_gnn_residuals(n_residual_training_epochs=100):
     
             t0 = time.time()
                 
-            train_loss = train(train_loader, model, optimizer, device=device)
-            valid_loss, p, y, root_subhalo_id = validate(valid_loader, model, device=device)
+            train_loss = train_epoch_geometric(train_loader, model, optimizer, device, augment_strength=3e-4, augment_edges=False)
+            valid_loss, p, y, root_subhalo_id = validate_geometric(valid_loader, model, device, return_ids=True, return_centrals=False)
         
             t1 = time.time()
         

@@ -1,28 +1,30 @@
 import sys
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.data import Data
-from torch_geometric.loader import DataLoader, ClusterData, ClusterLoader
-from torch_geometric.nn import global_mean_pool, global_max_pool, global_add_pool, SAGEConv, DirGNNConv
-from torch_geometric.utils import remove_self_loops
+from torch.utils.data import DataLoader
+import numpy as np
+import pandas as pd
 
 from data import *
 from loader import *
-from model import *
+from training_utils import (
+    TrainingLogger,
+    train_epoch_tensor,
+    validate_tensor,
+    combine_kfold_results,
+    get_device
+)
 
-import matplotlib.pyplot as plt
 import pickle
-import random
-from itertools import compress
-from sklearn.model_selection import KFold
-from scipy.stats import binned_statistic, median_abs_deviation
 import time
+from sklearn.model_selection import KFold
 
 from pathlib import Path
 ROOT = Path(__file__).parent.parent.resolve()
 results_dir = ROOT / "results"
 
-device = "cuda"
+device = get_device()
 
 #######################
 ### HYPERPARAMETERS ###
@@ -50,62 +52,10 @@ class SubhaloDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         return self.X[idx], self.y[idx]
 
-def train(dataloader, model, optimizer, device):
-    """Train GNN model using Gaussian NLL loss."""
-    model.train()
-
-    loss_total = 0
-    for X, y in (dataloader):
-
-        X = X.to(device)
-        y = y.to(device)
-
-        optimizer.zero_grad()
-        y_pred, logvar_pred = model(X).chunk(2, dim=1)
-        assert not torch.isnan(y_pred).any() and not torch.isnan(logvar_pred).any()
-
-        y_pred = y_pred.view(-1, 1)
-        logvar_pred = logvar_pred.mean()
-        loss = 0.5 * (F.mse_loss(y_pred, y) / 10**logvar_pred + logvar_pred)
-
-        loss.backward()
-        optimizer.step()
-        loss_total += loss.item()
-
-    return loss_total / len(dataloader)
+# Train function moved to training_utils.py
 
 
-def validate(dataloader, model, device):
-    model.eval()
-
-    loss_total = 0
-
-    y_preds = []
-    y_trues = []
-    subhalo_ids = []
-
-    for X, y in (dataloader):
-        with torch.no_grad():
-            X = X.to(device)
-            y = y.to(device)
-            y_pred, logvar_pred = model(X).chunk(2, dim=1)
-            y_pred = y_pred.view(-1, 1)
-            logvar_pred = logvar_pred.mean()
-            loss = 0.5 * (F.mse_loss(y_pred, y) / 10**logvar_pred + logvar_pred)
-
-            loss_total += loss.item()
-            
-            y_preds += list(y_pred.detach().cpu().numpy())
-            y_trues += list(y.detach().cpu().numpy())
-
-    y_preds = np.concatenate(y_preds)
-    y_trues = np.array(y_trues)
-
-    return (
-        loss_total / len(dataloader),
-        y_preds,
-        y_trues
-    )
+# Validate function moved to training_utils.py
 
 
 def predict_mlp():
@@ -159,8 +109,8 @@ def predict_mlp():
         for epoch in range(n_epochs):
         
     
-            train_loss = train(train_loader, model, optimizer, device=device)
-            valid_loss, preds, trues = validate(valid_loader, model, device=device)
+            train_loss = train_epoch_tensor(train_loader, model, optimizer, device)
+            valid_loss, preds, trues = validate_tensor(valid_loader, model, device)
             
             train_losses.append(train_loss)
             valid_losses.append(valid_loss)
@@ -180,14 +130,8 @@ def predict_mlp():
         results.to_csv(f"{results_dir}/predictions-halo_only-{k+1}of{K}.csv", index=False)
 
 def combine_validation_experiments():
-    pm1 = pd.read_csv(f"{results_dir}/predictions-halo_only-1of3.csv", index_col="subhalo_id")
-    pm1["k"] = 1
-    pm2 = pd.read_csv(f"{results_dir}/predictions-halo_only-2of3.csv", index_col="subhalo_id")
-    pm2["k"] = 2
-    pm3 = pd.read_csv(f"{results_dir}/predictions-halo_only-3of3.csv", index_col="subhalo_id")
-    pm3["k"] = 3
-    preds_env = pd.concat([pm1, pm2, pm3])
-    preds_env.to_csv(f"{results_dir}/predictions-halo_only.csv")
+    """Combine k-fold validation results - wrapper for utility function."""
+    return combine_kfold_results(results_dir, "predictions-halo_only", K)
 
 if __name__ == "__main__":
     #predict_mlp()

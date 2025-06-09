@@ -2,7 +2,7 @@
 
 Is halo assembly history or environment more important for learning galaxy properties? 
 
-This repository implements a comprehensive comparison framework using graph neural networks to predict galaxy stellar masses from either environmental context or assembly history.
+This repository implements a comprehensive comparison framework using graph neural networks to predict galaxy properties from either environmental context or assembly history. The framework supports **multi-output predictions**, simultaneously predicting both stellar mass and gas mass from TNG data.
 
 ## Quick Start
 
@@ -32,8 +32,13 @@ The experiment tracking system ensures:
 
 ### Supported Models
 1. **MLP Baseline**: Simple multilayer perceptron using only halo properties
-2. **Environment GNN**: Graph neural network using 3D environmental context
+2. **Environment GNN**: Graph neural network using 3D environmental context  
 3. **Merger Tree GNN**: Graph neural network using assembly history
+
+All models support **multi-output predictions**, simultaneously predicting:
+- **Stellar mass** (log M_star) 
+- **Gas mass** (log M_gas)
+- **Uncertainty estimates** (log-variance) for both outputs
 
 ### Residual Learning
 Train models to predict the residuals from base model predictions:
@@ -47,6 +52,12 @@ python run_experiments.py --experiment "comparison" --residual --base-model env_
 **Environment** We use `FoF_subfind` subhalo catalogs from Illustris TNG100, crossmatched between dark matter only and hydrodynamic simulations. We select halos with $M_{\rm halo} \geq 10^{10} M_{\odot}$ and without any subhalo flags.
 
 **Assembly history** We use the `Subfind` merger trees from TNG100-1-Dark, selecting only halos with $M_{\rm halo} \geq 10^{10} M_{\odot}$.
+
+**Targets** Models predict multiple galaxy properties:
+- `subhalo_logstellarmass`: Log stellar mass in solar masses
+- `subhalo_loggasmass`: Log gas mass in solar masses
+
+Both targets are extracted from hydrodynamic simulations and predicted using dark matter-only features.
 
 ## Code Structure
 
@@ -125,9 +136,33 @@ residuals = tracker.create_residual_targets("env_gnn")
 
 ## Key Features
 
+- **Multi-Output Predictions**: Simultaneously predict stellar mass and gas mass with uncertainty estimates
 - **Consistent Splits**: Same train/validation splits across all models
 - **Detailed Tracking**: Every prediction saved with metadata for analysis
 - **Configurable**: Easy to modify hyperparameters and add new models
 - **Portable**: No hardcoded paths, works on any system
 - **Reproducible**: Fixed random seeds and comprehensive logging
+
+## Output Format
+
+Results are saved with separate columns for each target:
+- `pred_{model}_Mstar`: Stellar mass predictions
+- `pred_{model}_Mgas`: Gas mass predictions  
+- `target_Mstar`: True stellar mass values
+- `target_Mgas`: True gas mass values
+
+Example result structure:
+```python
+# results/experiments/{experiment}/predictions/mlp_fold_0_predictions.csv
+fold  index  pred_mlp_Mstar  pred_mlp_Mgas  target_Mstar  target_Mgas
+0     1234   10.52           9.81           10.45         9.73
+0     5678   11.23           10.12          11.18         10.05
+```
+
+## Recent Updates
+
+- **Multi-output support**: Extended all models to predict both stellar mass and gas mass
+- **Improved tensor handling**: Fixed shape compatibility issues in training pipeline
+- **Enhanced experiment tracking**: Separate columns for each prediction target
+- **Robust validation**: Proper handling of multi-dimensional predictions and targets
 

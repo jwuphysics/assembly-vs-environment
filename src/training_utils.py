@@ -179,7 +179,7 @@ def train_epoch_tensor(
         
         assert not torch.isnan(y_pred).any() and not torch.isnan(logvar_pred).any()
         
-        y_pred = y_pred.view(-1, 1)
+        y_pred = y_pred.view(-1, y.shape[1] if len(y.shape) > 1 else 1)
         logvar_pred = logvar_pred.mean()
         
         loss = gaussian_nll_loss(y_pred, y, logvar_pred)
@@ -294,7 +294,7 @@ def validate_tensor(
             output = model(X)
             y_pred, logvar_pred = output.chunk(2, dim=1)
             
-            y_pred = y_pred.view(-1, 1)
+            y_pred = y_pred.view(-1, y.shape[1] if len(y.shape) > 1 else 1)
             logvar_pred = logvar_pred.mean()
             
             loss = gaussian_nll_loss(y_pred, y, logvar_pred)
@@ -336,7 +336,7 @@ class TrainingLogger:
                 self.start_time = time.time()
                 
             current_time = time.time()
-            rmse = np.sqrt(np.mean((predictions - targets.flatten())**2))
+            rmse = np.sqrt(np.mean((predictions - targets)**2))
             
             with open(self.log_file_path, "a") as f:
                 f.write(f"{epoch + 1: >4d}    {train_loss: >9.5f}    {valid_loss: >9.5f}    "

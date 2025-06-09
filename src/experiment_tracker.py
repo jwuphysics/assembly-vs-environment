@@ -268,9 +268,19 @@ class ExperimentTracker:
         df_data = {
             'fold': fold,
             'index': indices,
-            f'pred_{model_name}': predictions.flatten() if predictions.ndim > 1 else predictions,
-            'target': targets.flatten() if targets.ndim > 1 else targets,
         }
+        
+        # Handle multi-output predictions and targets
+        if predictions.ndim > 1 and predictions.shape[1] > 1:
+            # Multi-output case
+            for i in range(predictions.shape[1]):
+                output_name = 'Mstar' if i == 0 else 'Mgas' if i == 1 else f'output_{i}'
+                df_data[f'pred_{model_name}_{output_name}'] = predictions[:, i]
+                df_data[f'target_{output_name}'] = targets[:, i]
+        else:
+            # Single output case
+            df_data[f'pred_{model_name}'] = predictions.flatten() if predictions.ndim > 1 else predictions
+            df_data['target'] = targets.flatten() if targets.ndim > 1 else targets
         
         # Add additional columns
         if additional_data:

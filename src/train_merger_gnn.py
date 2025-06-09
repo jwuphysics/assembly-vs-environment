@@ -88,7 +88,7 @@ def kfold_validate_trees():
         train_loader = DataLoader(list(compress(trees, train_mask)), batch_size=batch_size, shuffle=True, pin_memory=True)
         valid_loader = DataLoader(list(compress(trees, valid_mask)), batch_size=batch_size, shuffle=False, pin_memory=True)
     
-        model = MultiSAGENet(n_in=8, n_hidden=n_hidden, n_layers=n_layers, bias=bias, n_out=1).to(device)
+        model = MultiSAGENet(n_in=8, n_hidden=n_hidden, n_layers=n_layers, bias=bias, n_out=2).to(device)
         # model = GCN(n_in=8, hidden_channels=128, n_out=1).to(device)
         
         train_losses = []
@@ -119,8 +119,10 @@ def kfold_validate_trees():
         log_file.close()
         results = pd.DataFrame({
             "root_subhalo_ids": np.array(root_subhalo_ids),
-            "p_envGNN_dmo": p,
-            "log_Mstar": y,
+            "p_mergertreeGNN_Mstar": p[:, 0],
+            "p_mergertreeGNN_Mgas": p[:, 1],
+            "log_Mstar": y[:, 0],
+            "log_Mgas": y[:, 1],
         })
     
         results.to_csv(f"{results_dir}/predictions-mergertreeGNN-{k+1}of{K}.csv", index=False)
@@ -171,7 +173,7 @@ def predict_env_gnn_residuals(n_residual_training_epochs=100):
         train_loader = DataLoader(list(compress(trees, train_mask)), batch_size=batch_size, shuffle=True, pin_memory=True)
         valid_loader = DataLoader(list(compress(trees, valid_mask)), batch_size=batch_size, shuffle=False, pin_memory=True)
     
-        model = MultiSAGENet(n_in=8, n_hidden=n_hidden, n_layers=n_layers, bias=bias, n_out=1).to(device)
+        model = MultiSAGENet(n_in=8, n_hidden=n_hidden, n_layers=n_layers, bias=bias, n_out=2).to(device)
         
         train_losses = []
         valid_losses = []

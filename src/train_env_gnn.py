@@ -149,8 +149,10 @@ def kfold_validate_graphs():
         results = pd.DataFrame({
             "valid_idxs": valid_idxs,
             "subhalo_id": select_valid(data.subhalo_id),
-            "log_Mstar": select_valid(data.y),
-            "p_envGNN_dmo": p[np.argsort(valid_idxs)],
+            "log_Mstar": select_valid(data.y[:, 0]),
+            "log_Mgas": select_valid(data.y[:, 1]),
+            "p_envGNN_Mstar": p[np.argsort(valid_idxs), 0],
+            "p_envGNN_Mgas": p[np.argsort(valid_idxs), 1],
             "log_Mhalo_dmo": select_valid(data.x[:, 0]),
             "log_Vmax_dmo": select_valid(data.x[:, 1]),
             "log_r50_dmo": select_valid(data.x[:, 3]),

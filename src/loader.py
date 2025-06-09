@@ -55,8 +55,8 @@ def make_cosmic_graph(subhalos: pd.DataFrame, D_link: int, periodic: bool=True) 
         dtype=torch.float,
     )
 
-    # hydro total stellar mass
-    y = torch.tensor(df[['subhalo_logstellarmass']].values, dtype=torch.float) # , 'subhalo_loggasmass', 'subhalo_logsfr', 'subhalo_gasmetallicity', 'subhalo_starmetallicity'
+    # hydro total stellar mass and gas mass
+    y = torch.tensor(df[['subhalo_logstellarmass', 'subhalo_loggasmass']].values, dtype=torch.float)
 
     # phase space coordinates
     pos = torch.tensor(df[['subhalo_x_DMO', 'subhalo_y_DMO', 'subhalo_z_DMO']].values, dtype=torch.float)
@@ -250,11 +250,13 @@ def make_merger_tree_graphs(trees: pd.DataFrame, subhalos: pd.DataFrame) -> list
         edge_index = torch.tensor(([[id2idx[e1], id2idx[e2]] for (e1, e2) in edges]), dtype=torch.long).t().contiguous()
         
         final_logstellarmass = torch.tensor([root_subhalo["subhalo_logstellarmass"]], dtype=torch.float)
+        final_loggasmass = torch.tensor([root_subhalo["subhalo_loggasmass"]], dtype=torch.float)
+        final_targets = torch.cat([final_logstellarmass, final_loggasmass], dim=0)
 
         graph = Data(
             x=x, 
             edge_index=edge_index, 
-            y=final_logstellarmass, 
+            y=final_targets, 
             is_central=is_central, 
             root_subhalo_id=root_subhalo_id
         )

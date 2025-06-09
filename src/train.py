@@ -30,7 +30,7 @@ def train_merger_tree(model=None, n_epochs=100, K=5):
         valid_loader = DataLoader(valid_dataset, batch_size=32, shuffle=False)
 
         if model is None:
-            model = SAGEGraphConvNet(n_in=9).to(device)
+            model = SAGEGraphConvNet(n_in=9, n_out=2).to(device)
             
         optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-5)
         for epoch in range(n_epochs):
@@ -57,7 +57,7 @@ def train_point_cloud(model=None, n_epochs=100, K=5):
                 hidden_channels=43, 
                 aggr=["sum", "max", "mean"], 
                 latent_channels=64, 
-                n_out=1, 
+                n_out=2, 
                 n_unshared_layers=4, 
                 act_fn=torch.nn.SiLU()
             ).to(device)

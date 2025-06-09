@@ -138,7 +138,7 @@ def train_epoch_geometric(
         
         assert not torch.isnan(y_pred).any() and not torch.isnan(logvar_pred).any()
         
-        y_pred = y_pred.view(-1, model.n_out if hasattr(model, 'n_out') else 1)
+        y_pred = y_pred.view(-1, model.n_out if hasattr(model, 'n_out') else 2)
         logvar_pred = logvar_pred.mean()
         
         loss = gaussian_nll_loss(y_pred, data.y, logvar_pred)
@@ -221,14 +221,14 @@ def validate_geometric(
             output = model(data)
             y_pred, logvar_pred = output.chunk(2, dim=1)
             
-            y_pred = y_pred.view(-1, model.n_out if hasattr(model, 'n_out') else 1)
+            y_pred = y_pred.view(-1, model.n_out if hasattr(model, 'n_out') else 2)
             logvar_pred = logvar_pred.mean()
             
             loss = gaussian_nll_loss(y_pred, data.y, logvar_pred)
             loss_total += loss.item()
             
-            y_preds.extend(y_pred.detach().cpu().numpy())
-            y_trues.extend(data.y.detach().cpu().numpy())
+            y_preds.append(y_pred.detach().cpu().numpy())
+            y_trues.append(data.y.detach().cpu().numpy())
             
             # Collect additional data if requested
             batch_additional = {}
@@ -244,8 +244,8 @@ def validate_geometric(
                 
             additional_data.append(batch_additional)
     
-    y_preds = np.concatenate(y_preds) if y_preds else np.array([])
-    y_trues = np.array(y_trues)
+    y_preds = np.concatenate(y_preds, axis=0) if y_preds else np.array([])
+    y_trues = np.concatenate(y_trues, axis=0) if len(y_trues) > 0 else np.array([])
     
     # Combine additional data
     combined_additional = {}
@@ -300,11 +300,11 @@ def validate_tensor(
             loss = gaussian_nll_loss(y_pred, y, logvar_pred)
             loss_total += loss.item()
             
-            y_preds.extend(y_pred.detach().cpu().numpy())
-            y_trues.extend(y.detach().cpu().numpy())
+            y_preds.append(y_pred.detach().cpu().numpy())
+            y_trues.append(y.detach().cpu().numpy())
     
-    y_preds = np.concatenate(y_preds)
-    y_trues = np.array(y_trues)
+    y_preds = np.concatenate(y_preds, axis=0)
+    y_trues = np.concatenate(y_trues, axis=0)
     
     return loss_total / len(dataloader), y_preds, y_trues
 

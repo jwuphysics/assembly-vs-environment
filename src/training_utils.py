@@ -76,19 +76,27 @@ def gaussian_nll_loss(y_pred: torch.Tensor, y_true: torch.Tensor, logvar: torch.
     Returns:
         Gaussian NLL loss
     """
-    # Create mask for valid targets (exclude negative values)
+    # For multi-output, we need to handle masking differently
+    # We'll compute loss only on valid elements, but preserve tensor structure
     valid_mask = (y_true >= 0.)
     
     # If no valid targets, return zero loss
     if not valid_mask.any():
         return torch.tensor(0.0, device=y_pred.device, requires_grad=True)
     
-    # Apply mask to predictions and targets
-    y_pred_masked = y_pred[valid_mask]
-    y_true_masked = y_true[valid_mask]
+    # For element-wise masking in multi-output case
+    if y_true.dim() > 1:
+        # Apply mask element-wise and compute mean only over valid elements
+        squared_error = (y_pred - y_true) ** 2
+        valid_squared_error = squared_error[valid_mask]
+        mse_loss = valid_squared_error.mean()
+    else:
+        # Single output case - use standard masking
+        y_pred_masked = y_pred[valid_mask]
+        y_true_masked = y_true[valid_mask]
+        mse_loss = F.mse_loss(y_pred_masked, y_true_masked)
     
-    # Compute loss only on valid samples
-    return 0.5 * (F.mse_loss(y_pred_masked, y_true_masked) / 10**logvar + logvar)
+    return 0.5 * (mse_loss / 10**logvar + logvar)
 
 
 def apply_data_augmentation(data, augment_strength: float = 3e-3, augment_edges: bool = True):

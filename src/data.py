@@ -150,7 +150,7 @@ def load_subhalos(hydro: bool=True, cuts: dict=cuts, snapshot: int=snapshot) -> 
     df["subhalo_loghalomass"] = np.log10(df["subhalo_halomass"] / h)+10
     df["subhalo_logvmax"] = np.log10(df["subhalo_vmax"])
     df["subhalo_logstellarhalfmassradius"] = np.log10(df["subhalo_stellarhalfmassradius"])
-    df["subhalo_loggasmass"] = np.log10(df["subhalo_gasmass"])
+    df["subhalo_loggasmass"] = np.where(df["subhalo_gasmass"] > 0, np.log10(df["subhalo_gasmass"] / h) + 10, -1.0)
 
     df["subhalo_logR50"] = np.log10(1+df["subhalo_R50"])
     df["subhalo_logMRmax"] = np.log10(df["subhalo_MRmax"] / h) + 10

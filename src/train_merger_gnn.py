@@ -74,9 +74,9 @@ def kfold_validate_trees():
 
     # impose mass cut for convenience
     if only_centrals:
-        trees = [tree for tree in trees if ((tree.is_central) & (tree.y[0] > minimum_root_stellar_mass))]
+        trees = [tree for tree in trees if ((tree.is_central) & (tree.y[0, 0] > minimum_root_stellar_mass))]
     else: 
-        trees = [tree for tree in trees if tree.y[0] > minimum_root_stellar_mass]
+        trees = [tree for tree in trees if tree.y[0, 0] > minimum_root_stellar_mass]
 
     N = len(trees)
     
@@ -157,9 +157,9 @@ def predict_env_gnn_residuals(n_residual_training_epochs=100):
     
     # impose mass cut for convenience
     if only_centrals:
-        trees = [tree for tree in trees if ((tree.is_central) & (tree.y[0] > minimum_root_stellar_mass))]
+        trees = [tree for tree in trees if ((tree.is_central) & (tree.y[0, 0] > minimum_root_stellar_mass))]
     else: 
-        trees = [tree for tree in trees if tree.y[0] > minimum_root_stellar_mass]
+        trees = [tree for tree in trees if tree.y[0, 0] > minimum_root_stellar_mass]
     
     for tree in trees:
         tree.log_Mstar = tree.y # hang on to this

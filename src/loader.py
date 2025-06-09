@@ -251,7 +251,7 @@ def make_merger_tree_graphs(trees: pd.DataFrame, subhalos: pd.DataFrame) -> list
         
         final_logstellarmass = torch.tensor([root_subhalo["subhalo_logstellarmass"]], dtype=torch.float)
         final_loggasmass = torch.tensor([root_subhalo["subhalo_loggasmass"]], dtype=torch.float)
-        final_targets = torch.cat([final_logstellarmass, final_loggasmass], dim=0)
+        final_targets = torch.stack([final_logstellarmass[0], final_loggasmass[0]], dim=0).unsqueeze(0)
 
         graph = Data(
             x=x, 

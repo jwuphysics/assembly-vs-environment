@@ -74,9 +74,9 @@ def kfold_validate_trees():
 
     # impose mass cut for convenience
     if only_centrals:
-        trees = [tree for tree in trees if ((tree.is_central) & (tree.y > minimum_root_stellar_mass))]
+        trees = [tree for tree in trees if ((tree.is_central) & (tree.y[0] > minimum_root_stellar_mass))]
     else: 
-        trees = [tree for tree in trees if tree.y > minimum_root_stellar_mass]
+        trees = [tree for tree in trees if tree.y[0] > minimum_root_stellar_mass]
 
     N = len(trees)
     
@@ -118,11 +118,13 @@ def kfold_validate_trees():
 
         log_file.close()
         results = pd.DataFrame({
+            "fold": k,
+            "index": np.array(root_subhalo_ids),
             "root_subhalo_ids": np.array(root_subhalo_ids),
             "p_mergertreeGNN_Mstar": p[:, 0],
             "p_mergertreeGNN_Mgas": p[:, 1],
-            "log_Mstar": y[:, 0],
-            "log_Mgas": y[:, 1],
+            "target_Mstar": y[:, 0],
+            "target_Mgas": y[:, 1],
         })
     
         results.to_csv(f"{results_dir}/predictions-mergertreeGNN-{k+1}of{K}.csv", index=False)
@@ -155,9 +157,9 @@ def predict_env_gnn_residuals(n_residual_training_epochs=100):
     
     # impose mass cut for convenience
     if only_centrals:
-        trees = [tree for tree in trees if ((tree.is_central) & (tree.y > minimum_root_stellar_mass))]
+        trees = [tree for tree in trees if ((tree.is_central) & (tree.y[0] > minimum_root_stellar_mass))]
     else: 
-        trees = [tree for tree in trees if tree.y > minimum_root_stellar_mass]
+        trees = [tree for tree in trees if tree.y[0] > minimum_root_stellar_mass]
     
     for tree in trees:
         tree.log_Mstar = tree.y # hang on to this

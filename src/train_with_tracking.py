@@ -222,9 +222,9 @@ def train_merger_gnn_tracked(experiment_name: str, fold: int = None,
     
     # Filter trees based on config
     if config['only_centrals']:
-        trees = [tree for tree in trees if tree.is_central and tree.y > config['minimum_root_stellar_mass']]
+        trees = [tree for tree in trees if tree.is_central and tree.y[0] > config['minimum_root_stellar_mass']]
     else:
-        trees = [tree for tree in trees if tree.y > config['minimum_root_stellar_mass']]
+        trees = [tree for tree in trees if tree.y[0] > config['minimum_root_stellar_mass']]
     
     # Handle residual mode
     if residual_mode:

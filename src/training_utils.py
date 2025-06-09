@@ -77,7 +77,7 @@ def gaussian_nll_loss(y_pred: torch.Tensor, y_true: torch.Tensor, logvar: torch.
         Gaussian NLL loss
     """
     # Create mask for valid targets (exclude negative values)
-    valid_mask = (y_true < 0.)
+    valid_mask = (y_true >= 0.)
     
     # If no valid targets, return zero loss
     if not valid_mask.any():

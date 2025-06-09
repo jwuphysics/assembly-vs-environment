@@ -16,7 +16,8 @@ from training_utils import (
     validate_geometric,
     combine_kfold_results,
     get_device,
-    configure_optimizer
+    configure_optimizer,
+    get_spatial_train_valid_indices
 )
 
 import pickle
@@ -39,41 +40,7 @@ n_unshared_layers = config['n_unshared_layers']
 aggr = config['aggr']
 K = K_FOLDS
 
-def get_train_valid_indices(data, k, K=3, boxsize=75/0.6774, pad=3, epsilon=1e-10):
-    """k must be between `range(0, K)`. 
-
-    `boxsize` and `pad` are both in units of Mpc, and it is assumed that the 
-    `data` object has attribute `pos` of shape (N_rows, 3) also in units of Mpc.
-
-    `epsilon` is there so that the modular division doesn't cause the boolean
-    logic to wrap around.
-    """
-
-    # use z coordinate for train-valid split
-    train_1_mask = (
-        (data.pos[:, 2]  > ((k) / K * boxsize + pad) % boxsize) 
-        & (data.pos[:, 2] <= ((k + 1) / K * boxsize - epsilon) % boxsize)
-    )
-
-    train_2_mask = (
-        (data.pos[:, 2]  > ((k + 1)/ K * boxsize) % boxsize) 
-        & (data.pos[:, 2] <= ((k + 2) / K * boxsize - pad) % boxsize)
-    )
-
-    valid_mask = (
-        (data.pos[:, 2] > ((k + 2) / K * boxsize) % boxsize)
-        & (data.pos[:, 2] <= ((k + 3) / K * boxsize - epsilon) % boxsize)
-    )
-
-    # this is the weird pytorch way of doing `np.argwhere`
-    train_indices = (train_1_mask  | train_2_mask).nonzero(as_tuple=True)[0] 
-
-    valid_indices = valid_mask.nonzero(as_tuple=True)[0]
-
-    # ensure zero overlap
-    assert (set(train_indices) & set(valid_indices)) == set()
-
-    return train_indices, valid_indices
+# get_train_valid_indices moved to training_utils.py as get_spatial_train_valid_indices
 
 
 # Train function moved to training_utils.py
@@ -104,7 +71,7 @@ def kfold_validate_graphs():
             aggr=(["sum", "max", "mean"] if aggr == "multi" else aggr)
         ).to("cuda")
     
-        train_indices, valid_indices = get_train_valid_indices(data, k=k, K=K)
+        train_indices, valid_indices = get_spatial_train_valid_indices(data, k=k, K=K)
         
         train_data = ClusterData(
             data.subgraph(train_indices), 

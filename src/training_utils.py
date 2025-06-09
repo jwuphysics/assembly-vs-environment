@@ -16,11 +16,14 @@ from torch.utils.data import DataLoader
 from torch_geometric.loader import DataLoader as GeometricDataLoader
 from pathlib import Path
 try:
-    from config import RANDOM_SEED, DEVICE_PREFERENCE
+    from .config import RANDOM_SEED, DEVICE_PREFERENCE
 except ImportError:
-    # Fallback values if config not available
-    RANDOM_SEED = 42
-    DEVICE_PREFERENCE = "cuda"
+    try:
+        from config import RANDOM_SEED, DEVICE_PREFERENCE
+    except ImportError:
+        # Fallback values if config not available
+        RANDOM_SEED = 42
+        DEVICE_PREFERENCE = "cuda"
 
 
 def configure_optimizer(model: nn.Module, lr: float, wd: float) -> torch.optim.AdamW:
@@ -193,7 +196,7 @@ def validate_geometric(
     device: str,
     return_ids: bool = True,
     return_centrals: bool = False
-) -> Tuple[float, np.ndarray, np.ndarray, ...]:
+) -> Tuple[float, np.ndarray, np.ndarray, Any]:
     """Validate PyTorch Geometric model.
     
     Args:
@@ -394,6 +397,60 @@ def get_device(prefer_cuda: Optional[bool] = None) -> str:
     if prefer_cuda and torch.cuda.is_available():
         return "cuda"
     return "cpu"
+
+
+def get_spatial_train_valid_indices(data, k: int, K: int = 3, boxsize: float = 75/0.6774, 
+                                   pad: float = 3, epsilon: float = 1e-10):
+    """Create spatial train/validation indices using z-coordinate splits.
+    
+    This creates spatially separated train/validation sets by dividing the simulation
+    box along the z-axis. Each fold uses 1/K of the box for validation and the rest
+    for training (with padding to avoid boundary effects).
+    
+    Args:
+        data: PyTorch Geometric data object with pos attribute
+        k: Fold index (0 to K-1)
+        K: Total number of folds
+        boxsize: Simulation box size in Mpc
+        pad: Padding between train/valid regions in Mpc
+        epsilon: Small value to avoid boundary issues
+        
+    Returns:
+        Tuple of (train_indices, valid_indices) as torch tensors
+    """
+    z_coords = data.pos[:, 2]
+    
+    # Calculate validation region boundaries
+    valid_start = (k / K * boxsize) % boxsize
+    valid_end = ((k + 1) / K * boxsize) % boxsize
+    
+    # Handle wrap-around case
+    if valid_start > valid_end:  # Wraps around the boundary
+        valid_mask = (z_coords >= valid_start) | (z_coords <= valid_end)
+    else:
+        valid_mask = (z_coords >= valid_start) & (z_coords <= valid_end)
+    
+    # Create training region with padding
+    train_start = ((k + 1) / K * boxsize + pad) % boxsize
+    train_end = (k / K * boxsize - pad) % boxsize
+    
+    # Handle wrap-around for training region
+    if train_start > train_end:  # Wraps around the boundary
+        train_mask = (z_coords >= train_start) | (z_coords <= train_end)
+    else:
+        train_mask = (z_coords >= train_start) & (z_coords <= train_end)
+    
+    # Get indices
+    train_indices = train_mask.nonzero(as_tuple=True)[0]
+    valid_indices = valid_mask.nonzero(as_tuple=True)[0]
+    
+    # Ensure zero overlap
+    overlap = set(train_indices.tolist()) & set(valid_indices.tolist())
+    assert len(overlap) == 0, f"Found {len(overlap)} overlapping indices between train and validation"
+    
+    print(f"Fold {k}/{K}: Train={len(train_indices)}, Valid={len(valid_indices)}")
+    
+    return train_indices, valid_indices
 
 
 def count_parameters(model: nn.Module) -> int:

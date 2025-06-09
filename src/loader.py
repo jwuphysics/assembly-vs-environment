@@ -14,7 +14,10 @@ from torch_geometric.utils import to_undirected, remove_self_loops
 from torch_scatter import scatter_add
 from typing import List
 
-from data import *
+try:
+    from .data import *
+except ImportError:
+    from data import *
 
 np.seterr(divide='ignore')
 

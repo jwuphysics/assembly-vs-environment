@@ -18,7 +18,10 @@ import numpy as np
 import pandas as pd
 import torch
 
-from config import RESULTS_DIR, LOGS_DIR, RANDOM_SEED, K_FOLDS
+try:
+    from .config import RESULTS_DIR, LOGS_DIR, RANDOM_SEED, K_FOLDS
+except ImportError:
+    from config import RESULTS_DIR, LOGS_DIR, RANDOM_SEED, K_FOLDS
 
 
 class ExperimentTracker:
@@ -135,11 +138,14 @@ class ExperimentTracker:
             with open(RESULTS_DIR / "cosmic_graphs.pkl", 'rb') as f:
                 data = pickle.load(f)
         
-        from train_env_gnn import get_train_valid_indices
+        try:
+            from .training_utils import get_spatial_train_valid_indices
+        except ImportError:
+            from training_utils import get_spatial_train_valid_indices
         
         splits = {}
         for k in range(K_FOLDS):
-            train_indices, valid_indices = get_train_valid_indices(data, k=k, K=K_FOLDS)
+            train_indices, valid_indices = get_spatial_train_valid_indices(data, k=k, K=K_FOLDS)
             splits[k] = {
                 'train': train_indices.numpy() if hasattr(train_indices, 'numpy') else train_indices,
                 'valid': valid_indices.numpy() if hasattr(valid_indices, 'numpy') else valid_indices

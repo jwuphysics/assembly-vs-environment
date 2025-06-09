@@ -19,14 +19,26 @@ from typing import Dict, List, Optional, Tuple, Any
 import pickle
 import time
 
-from config import get_model_config, RESULTS_DIR, K_FOLDS, RANDOM_SEED
-from model import MultiSAGENet, EdgeInteractionGNN
-from training_utils import (
-    TrainingLogger, train_epoch_geometric, validate_geometric,
-    train_epoch_tensor, validate_tensor, configure_optimizer, get_device
-)
-from experiment_tracker import ExperimentTracker
-from loader import prepare_all_data
+try:
+    from .config import get_model_config, RESULTS_DIR, K_FOLDS, RANDOM_SEED
+except ImportError:
+    from config import get_model_config, RESULTS_DIR, K_FOLDS, RANDOM_SEED
+try:
+    from .model import MultiSAGENet, EdgeInteractionGNN
+    from .training_utils import (
+        TrainingLogger, train_epoch_geometric, validate_geometric,
+        train_epoch_tensor, validate_tensor, configure_optimizer, get_device
+    )
+    from .experiment_tracker import ExperimentTracker
+    from .loader import prepare_all_data
+except ImportError:
+    from model import MultiSAGENet, EdgeInteractionGNN
+    from training_utils import (
+        TrainingLogger, train_epoch_geometric, validate_geometric,
+        train_epoch_tensor, validate_tensor, configure_optimizer, get_device
+    )
+    from experiment_tracker import ExperimentTracker
+    from loader import prepare_all_data
 
 
 def train_env_gnn_tracked(experiment_name: str, fold: int = None) -> Dict[str, Any]:

@@ -76,7 +76,19 @@ def gaussian_nll_loss(y_pred: torch.Tensor, y_true: torch.Tensor, logvar: torch.
     Returns:
         Gaussian NLL loss
     """
-    return 0.5 * (F.mse_loss(y_pred, y_true) / 10**logvar + logvar)
+    # Create mask for valid targets (exclude negative values)
+    valid_mask = (y_true < 0.)
+    
+    # If no valid targets, return zero loss
+    if not valid_mask.any():
+        return torch.tensor(0.0, device=y_pred.device, requires_grad=True)
+    
+    # Apply mask to predictions and targets
+    y_pred_masked = y_pred[valid_mask]
+    y_true_masked = y_true[valid_mask]
+    
+    # Compute loss only on valid samples
+    return 0.5 * (F.mse_loss(y_pred_masked, y_true_masked) / 10**logvar + logvar)
 
 
 def apply_data_augmentation(data, augment_strength: float = 3e-3, augment_edges: bool = True):

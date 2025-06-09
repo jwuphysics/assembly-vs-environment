@@ -1,9 +1,133 @@
 # Assembly versus Environment
+
 Is halo assembly history or environment more important for learning galaxy properties? 
+
+This repository implements a comprehensive comparison framework using graph neural networks to predict galaxy stellar masses from either environmental context or assembly history.
+
+## Quick Start
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Set up TNG data paths (optional - defaults to ./illustris_data/)
+export TNG_BASE_PATH="/path/to/your/TNG100-1"
+export TNG_EXTENDED_TREE_PATH="/path/to/extended/tree/files"
+
+# Run a complete comparison experiment
+python run_experiments.py --experiment "my_comparison" --models mlp env_gnn merger_gnn
+
+# Analyze results
+python analysis_template.py --experiment "my_comparison"
+```
+
+## Experiment Framework
+
+### Reproducible Comparisons
+The experiment tracking system ensures:
+- **Consistent train/validation splits** across all models
+- **Detailed prediction recording** for example-by-example analysis
+- **Automatic artifact management** (models, logs, predictions)
+- **Cross-model evaluation** with standardized metrics
+
+### Supported Models
+1. **MLP Baseline**: Simple multilayer perceptron using only halo properties
+2. **Environment GNN**: Graph neural network using 3D environmental context
+3. **Merger Tree GNN**: Graph neural network using assembly history
+
+### Residual Learning
+Train models to predict the residuals from base model predictions:
+```bash
+python run_experiments.py --experiment "comparison" --models env_gnn
+python run_experiments.py --experiment "comparison" --residual --base-model env_gnn
+```
 
 ## Data
 
-**Environment** We are using `FoF_subfind` subhalo catalogs from Illustris TNG100, crossmatched between dark matter only and hydrodynamic simulations. We select halos with $M_{\rm halo} \geq 10^{10} M_{\odot}$ and without any subhalo flags.
+**Environment** We use `FoF_subfind` subhalo catalogs from Illustris TNG100, crossmatched between dark matter only and hydrodynamic simulations. We select halos with $M_{\rm halo} \geq 10^{10} M_{\odot}$ and without any subhalo flags.
 
-**Assembly history** We are using the `Subfind` merger trees from TNG100-1-Dark, and selecting only halos with $M_{\rm halo} \geq 10^{10} M_{\odot}$.
+**Assembly history** We use the `Subfind` merger trees from TNG100-1-Dark, selecting only halos with $M_{\rm halo} \geq 10^{10} M_{\odot}$.
+
+## Code Structure
+
+```
+src/
+├── config.py              # Centralized configuration
+├── data.py                 # TNG data loading utilities  
+├── loader.py               # Graph construction and data preparation
+├── model.py                # Neural network architectures
+├── training_utils.py       # Shared training/validation functions
+├── experiment_tracker.py   # Experiment management and tracking
+└── train_with_tracking.py  # High-level training workflows
+
+run_experiments.py          # Main experiment runner
+analysis_template.py        # Result analysis and visualization
+requirements.txt            # Python dependencies
+```
+
+## Configuration
+
+All hyperparameters are centralized in `src/config.py`:
+
+```python
+from src.config import get_model_config
+
+# Get configuration for specific model
+env_config = get_model_config('env_gnn')
+merger_config = get_model_config('merger_gnn')
+mlp_config = get_model_config('mlp')
+```
+
+## Environment Variables
+
+- `TNG_BASE_PATH`: Path to TNG100-1 data directory
+- `TNG_EXTENDED_TREE_PATH`: Path to extended merger tree files
+
+## Example Workflows
+
+### Basic Comparison
+```python
+from src.train_with_tracking import run_comparison_experiment
+
+# Train all models with consistent splits
+tracker = run_comparison_experiment("my_experiment", ["mlp", "env_gnn", "merger_gnn"])
+
+# Get combined predictions for analysis
+combined = tracker.combine_all_predictions()
+eval_results = tracker.evaluate_models()
+```
+
+### Residual Learning
+```python
+from src.train_with_tracking import run_residual_experiment
+
+# Train merger tree GNN on environment GNN residuals
+residual_tracker = run_residual_experiment(
+    base_experiment="my_experiment",
+    base_model="env_gnn", 
+    residual_models=["merger_gnn"]
+)
+```
+
+### Custom Analysis
+```python
+from src.experiment_tracker import ExperimentTracker
+
+tracker = ExperimentTracker("my_experiment")
+
+# Load specific model predictions
+env_preds = tracker.load_predictions("env_gnn", fold=0)
+merger_preds = tracker.load_predictions("merger_gnn", fold=0)
+
+# Create residual targets
+residuals = tracker.create_residual_targets("env_gnn")
+```
+
+## Key Features
+
+- **Consistent Splits**: Same train/validation splits across all models
+- **Detailed Tracking**: Every prediction saved with metadata for analysis
+- **Configurable**: Easy to modify hyperparameters and add new models
+- **Portable**: No hardcoded paths, works on any system
+- **Reproducible**: Fixed random seeds and comprehensive logging
 

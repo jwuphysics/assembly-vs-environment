@@ -9,6 +9,7 @@ import pandas as pd
 from data import *
 from loader import *
 from model import EdgeInteractionGNN
+from config import get_model_config, RESULTS_DIR, K_FOLDS
 from training_utils import (
     TrainingLogger,
     train_epoch_geometric,
@@ -21,28 +22,22 @@ from training_utils import (
 import pickle
 import time
 
-from pathlib import Path
-ROOT = Path(__file__).parent.parent.resolve()
-results_dir = ROOT / "results"
-
+# Load configuration
+config = get_model_config('env_gnn')
+results_dir = RESULTS_DIR
 device = get_device()
 
-#######################
-### HYPERPARAMETERS ###
-#######################
-n_epochs = 500
-num_parts = 32
-
-lr = 1e-2
-wd = 1e-4
-
-n_layers = 2
-n_hidden = 32
-n_latent = 8
-n_unshared_layers = 4
-aggr = "multi"
-
-K = 3
+# Extract hyperparameters from config
+n_epochs = config['n_epochs']
+num_parts = config['num_parts']
+lr = config['lr']
+wd = config['weight_decay']
+n_layers = config['n_layers']
+n_hidden = config['n_hidden']
+n_latent = config['n_latent']
+n_unshared_layers = config['n_unshared_layers']
+aggr = config['aggr']
+K = K_FOLDS
 
 def get_train_valid_indices(data, k, K=3, boxsize=75/0.6774, pad=3, epsilon=1e-10):
     """k must be between `range(0, K)`. 
@@ -153,7 +148,12 @@ def kfold_validate_graphs():
             elif epoch == (n_epochs * 0.75):
                 optimizer = configure_optimizer(model, lr/125, wd)
         
-            train_loss = train_epoch_geometric(train_loader, model, optimizer, device, augment=True, augment_strength=3e-3, augment_edges=True)
+            train_loss = train_epoch_geometric(
+                train_loader, model, optimizer, device, 
+                augment=True, 
+                augment_strength=config['augment_strength'], 
+                augment_edges=config['augment_edges']
+            )
             valid_loss, p, y, *_  = validate_geometric(valid_loader, model, device, return_ids=True, return_centrals=True)
         
             train_losses.append(train_loss)

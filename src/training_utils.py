@@ -15,6 +15,12 @@ import numpy as np
 from torch.utils.data import DataLoader
 from torch_geometric.loader import DataLoader as GeometricDataLoader
 from pathlib import Path
+try:
+    from config import RANDOM_SEED, DEVICE_PREFERENCE
+except ImportError:
+    # Fallback values if config not available
+    RANDOM_SEED = 42
+    DEVICE_PREFERENCE = "cuda"
 
 
 def configure_optimizer(model: nn.Module, lr: float, wd: float) -> torch.optim.AdamW:
@@ -373,15 +379,18 @@ def combine_kfold_results(results_dir: Path, base_name: str, k_folds: int = 3) -
         raise FileNotFoundError(f"No k-fold result files found for {base_name}")
 
 
-def get_device(prefer_cuda: bool = True) -> str:
+def get_device(prefer_cuda: Optional[bool] = None) -> str:
     """Get the appropriate device for training.
     
     Args:
-        prefer_cuda: Whether to prefer CUDA if available
+        prefer_cuda: Whether to prefer CUDA if available. If None, uses config default.
         
     Returns:
         Device string ("cuda" or "cpu")
     """
+    if prefer_cuda is None:
+        prefer_cuda = (DEVICE_PREFERENCE == "cuda")
+        
     if prefer_cuda and torch.cuda.is_available():
         return "cuda"
     return "cpu"

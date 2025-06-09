@@ -16,6 +16,12 @@ import tqdm
 ROOT = Path(__file__).parent.parent.resolve()
 tng_base_path = f"{ROOT}/illustris_data/TNG100-1"
 
+# Alternative paths for different systems - can be set via environment variable
+tng_extended_tree_path = os.environ.get(
+    'TNG_EXTENDED_TREE_PATH', 
+    f"{ROOT}/illustris_data/TNG100-1/files/sublink"
+)
+
 seed = 42
 rng = np.random.RandomState(seed)
 random.seed(seed)
@@ -50,12 +56,24 @@ def load_subhalos(hydro: bool=True, cuts: dict=cuts, snapshot: int=snapshot) -> 
     if hydro:
         subhalo_fields += ["SubhaloFlag", "SubhaloSFR", "SubhaloGasMetallicity", "SubhaloStarMetallicity"]
 
-    subhalos = il.groupcat.loadSubhalos(base_path, snapshot, fields=subhalo_fields) 
+    try:
+        subhalos = il.groupcat.loadSubhalos(base_path, snapshot, fields=subhalo_fields)
+    except Exception as e:
+        raise FileNotFoundError(
+            f"Failed to load subhalos from {base_path}. "
+            f"Ensure TNG data is properly downloaded and accessible. Error: {e}"
+        ) 
 
     pos = subhalos["SubhaloPos"][:,:3]
 
     halo_fields = ["Group_M_Crit200", "GroupFirstSub", "GroupPos", "GroupVel"]
-    halos = il.groupcat.loadHalos(base_path, snapshot, fields=halo_fields)
+    try:
+        halos = il.groupcat.loadHalos(base_path, snapshot, fields=halo_fields)
+    except Exception as e:
+        raise FileNotFoundError(
+            f"Failed to load halos from {base_path}. "
+            f"Ensure TNG data is properly downloaded and accessible. Error: {e}"
+        )
 
     subhalo_pos = subhalos["SubhaloPos"][:] / (h*1e3)
     subhalo_gasmass = subhalos["SubhaloMassType"][:,0]
@@ -107,7 +125,13 @@ def load_subhalos(hydro: bool=True, cuts: dict=cuts, snapshot: int=snapshot) -> 
     
     # DMO-hydro matching
     if hydro:
-        dmo_hydro_match = h5py.File(f"{tng_base_path}/postprocessing/subhalo_matching_to_dark.hdf5")
+        matching_file = f"{tng_base_path}/postprocessing/subhalo_matching_to_dark.hdf5"
+        if not os.path.exists(matching_file):
+            raise FileNotFoundError(
+                f"DMO-hydro matching file not found: {matching_file}. "
+                f"This file is required for crossmatching simulations."
+            )
+        dmo_hydro_match = h5py.File(matching_file)
         df["subhalo_l_halo_tree"] = dmo_hydro_match["Snapshot_99"]["SubhaloIndexDark_LHaloTree"]
         df["subhalo_sublink"] = dmo_hydro_match["Snapshot_99"]["SubhaloIndexDark_SubLink"]      
 
@@ -212,7 +236,14 @@ def load_trees(cuts=cuts) -> pd.DataFrame:
     list_of_trees = []
 
     for i in range(0, 9):
-        filename = f"/home/john/research/illustris/TNG100-1/files/sublink/tree_extended.{i}.hdf5"
+        filename = f"{tng_extended_tree_path}/tree_extended.{i}.hdf5"
+        
+        if not os.path.exists(filename):
+            raise FileNotFoundError(
+                f"Extended tree file not found: {filename}\n"
+                f"Set TNG_EXTENDED_TREE_PATH environment variable to the correct path, "
+                f"or ensure files are in {tng_extended_tree_path}"
+            )
     
         with h5py.File(filename, 'r') as f:
             df = pd.DataFrame(

@@ -16,7 +16,13 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union, Any
 import numpy as np
 import pandas as pd
-import torch
+
+# Import torch only when needed for model saving
+try:
+    import torch
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
 
 try:
     from .config import RESULTS_DIR, LOGS_DIR, RANDOM_SEED, K_FOLDS
@@ -201,7 +207,7 @@ class ExperimentTracker:
     
     def record_model_training(self, model_name: str, fold: int, 
                             model_config: Dict, final_metrics: Dict,
-                            model_state: Optional[torch.nn.Module] = None):
+                            model_state: Optional[Any] = None):
         """Record model training information.
         
         Args:
@@ -225,10 +231,14 @@ class ExperimentTracker:
         
         # Save model if provided
         if model_state is not None:
-            model_file = self.models_dir / f"{model_name}_fold_{fold}.pth"
-            torch.save(model_state.state_dict(), model_file)
-            fold_info['model_saved'] = True
-            fold_info['model_file'] = str(model_file)
+            if not TORCH_AVAILABLE:
+                print(f"Warning: torch not available, cannot save model {model_name}_fold_{fold}")
+                fold_info['model_saved'] = False
+            else:
+                model_file = self.models_dir / f"{model_name}_fold_{fold}.pth"
+                torch.save(model_state.state_dict(), model_file)
+                fold_info['model_saved'] = True
+                fold_info['model_file'] = str(model_file)
         
         self.metadata['models'][model_name][f'fold_{fold}'] = fold_info
         self._save_metadata()
@@ -335,9 +345,21 @@ class ExperimentTracker:
         
         # Merge all predictions on index and fold
         combined = all_predictions[0]
+        
+        # Determine merge keys based on available columns
+        merge_keys = ['index', 'fold']
+        # Add target columns that exist in all dataframes
+        target_cols = [col for col in combined.columns if col.startswith('target_')]
+        if not target_cols and 'target' in combined.columns:
+            target_cols = ['target']
+        
+        for target_col in target_cols:
+            if all(target_col in df.columns for df in all_predictions):
+                merge_keys.append(target_col)
+        
         for df in all_predictions[1:]:
-            # Merge on index and fold, keeping all prediction columns
-            combined = combined.merge(df, on=['index', 'fold', 'target'], how='outer', suffixes=('', '_dup'))
+            # Merge on common keys, keeping all prediction columns
+            combined = combined.merge(df, on=merge_keys, how='outer', suffixes=('', '_dup'))
             # Remove duplicate columns
             combined = combined.loc[:, ~combined.columns.str.endswith('_dup')]
         
@@ -388,12 +410,26 @@ class ExperimentTracker:
         
         results = []
         for pred_col in pred_cols:
-            model_name = pred_col.replace('pred_', '')
+            # Extract model name and target type from prediction column
+            # e.g., 'pred_env_gnn_Mstar' -> model='env_gnn', target_type='Mstar'
+            parts = pred_col.replace('pred_', '').split('_')
+            if len(parts) > 1 and parts[-1] in ['Mstar', 'Mgas']:
+                model_name = '_'.join(parts[:-1])
+                target_type = parts[-1]
+                target_col = f'target_{target_type}'
+            else:
+                model_name = pred_col.replace('pred_', '')
+                target_col = 'target'
+                target_type = 'default'
+            
+            if target_col not in combined.columns:
+                print(f"Warning: target column {target_col} not found for {pred_col}")
+                continue
             
             for fold in combined['fold'].unique():
                 fold_data = combined[combined['fold'] == fold]
                 predictions = fold_data[pred_col].values
-                targets = fold_data['target'].values
+                targets = fold_data[target_col].values
                 
                 # Remove NaN values
                 valid_mask = ~(np.isnan(predictions) | np.isnan(targets))
@@ -404,7 +440,12 @@ class ExperimentTracker:
                     continue
                 
                 # Calculate metrics
-                fold_metrics = {'model': model_name, 'fold': fold, 'n_samples': len(predictions)}
+                fold_metrics = {
+                    'model': model_name, 
+                    'target_type': target_type,
+                    'fold': fold, 
+                    'n_samples': len(predictions)
+                }
                 
                 if 'mse' in metrics:
                     fold_metrics['mse'] = np.mean((predictions - targets) ** 2)

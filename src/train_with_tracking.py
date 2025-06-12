@@ -239,9 +239,18 @@ def train_merger_gnn_tracked(experiment_name: str, fold: int = None,
     if residual_mode:
         if base_model is None:
             raise ValueError("base_model must be specified for residual_mode")
-        # Load residual targets and modify tree targets
-        residual_data = tracker.load_predictions(base_model, 0)  # Assuming we have predictions
-        # This would need more implementation based on your specific residual setup
+        # Load residual targets from the base experiment
+        # The residual data is saved in the base experiment's predictions directory
+        base_experiment_name = experiment_name.split('_residuals_')[0]
+        base_tracker = ExperimentTracker(base_experiment_name)
+        residual_file = base_tracker.predictions_dir / f"residuals_{base_model}.csv"
+        
+        if not residual_file.exists():
+            raise FileNotFoundError(f"Residual data not found: {residual_file}")
+        
+        # Load residual data
+        import pandas as pd
+        residual_data = pd.read_csv(residual_file)
     
     # Determine which folds to train
     folds_to_train = [fold] if fold is not None else list(range(K_FOLDS))

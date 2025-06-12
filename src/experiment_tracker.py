@@ -365,24 +365,27 @@ class ExperimentTracker:
         
         return combined
     
-    def create_residual_targets(self, base_model: str, target_col: str = 'target') -> pd.DataFrame:
+    def create_residual_targets(self, base_model: str) -> pd.DataFrame:
         """Create residual targets for training models on prediction errors.
         
         Args:
             base_model: Name of the base model (e.g., 'env_gnn')
-            target_col: Name of the target column
             
         Returns:
-            DataFrame with residuals as new targets
+            DataFrame with residuals as new targets for both Mstar and Mgas
         """
         combined = self.combine_all_predictions()
         
-        base_pred_col = f'pred_{base_model}'
-        if base_pred_col not in combined.columns:
-            raise ValueError(f"Base model predictions not found: {base_pred_col}")
+        # Check for multi-output predictions
+        base_pred_mstar = f'pred_{base_model}_Mstar'
+        base_pred_mgas = f'pred_{base_model}_Mgas'
         
-        # Calculate residuals
-        combined[f'residual_{base_model}'] = combined[base_pred_col] - combined[target_col]
+        if base_pred_mstar not in combined.columns or base_pred_mgas not in combined.columns:
+            raise ValueError(f"Base model predictions not found: {base_pred_mstar}, {base_pred_mgas}")
+        
+        # Calculate residuals for both targets
+        combined[f'residual_{base_model}_Mstar'] = combined['target_Mstar'] - combined[base_pred_mstar]
+        combined[f'residual_{base_model}_Mgas'] = combined['target_Mgas'] - combined[base_pred_mgas]
         
         # Save residual targets
         residual_file = self.predictions_dir / f"residuals_{base_model}.csv"

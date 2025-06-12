@@ -41,15 +41,30 @@ def main():
         eval_results = tracker.evaluate_models()
         print("Evaluation complete!")
         
-        # Print summary table
+        # Print summary table separated by target type
         print("\n=== Model Performance Summary ===")
-        summary_stats = eval_results.groupby('model').agg({
-            'mse': ['mean', 'std'],
-            'mae': ['mean', 'std'], 
-            'r2': ['mean', 'std'],
-            'pearson': ['mean', 'std']
-        }).round(4)
-        print(summary_stats)
+        
+        # Group by both model and target_type for meaningful averages
+        if 'target_type' in eval_results.columns:
+            for target_type in eval_results['target_type'].unique():
+                print(f"\n--- {target_type} predictions ---")
+                target_results = eval_results[eval_results['target_type'] == target_type]
+                summary_stats = target_results.groupby('model').agg({
+                    'mse': ['mean', 'std'],
+                    'mae': ['mean', 'std'], 
+                    'r2': ['mean', 'std'],
+                    'pearson': ['mean', 'std']
+                }).round(4)
+                print(summary_stats)
+        else:
+            # Fallback for single-output case
+            summary_stats = eval_results.groupby('model').agg({
+                'mse': ['mean', 'std'],
+                'mae': ['mean', 'std'], 
+                'r2': ['mean', 'std'],
+                'pearson': ['mean', 'std']
+            }).round(4)
+            print(summary_stats)
         
     elif args.residual_only:
         # Run only residual experiment using existing base model

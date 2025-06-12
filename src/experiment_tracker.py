@@ -406,36 +406,42 @@ class ExperimentTracker:
         if metrics is None:
             metrics = ['mse', 'mae', 'r2', 'pearson']
         
-        combined = self.combine_all_predictions()
-        
-        # Find all prediction columns
-        pred_cols = [col for col in combined.columns if col.startswith('pred_')]
+        # Find all prediction files and evaluate each separately
+        pred_files = list(self.predictions_dir.glob("*_predictions.csv"))
         
         results = []
-        for pred_col in pred_cols:
-            # Extract model name and target type from prediction column
-            # e.g., 'pred_env_gnn_Mstar' -> model='env_gnn', target_type='Mstar'
-            parts = pred_col.replace('pred_', '').split('_')
-            if len(parts) > 1 and parts[-1] in ['Mstar', 'Mgas']:
-                model_name = '_'.join(parts[:-1])
-                target_type = parts[-1]
-                target_col = f'target_{target_type}'
-            else:
-                model_name = pred_col.replace('pred_', '')
-                target_col = 'target'
-                target_type = 'default'
+        for pred_file in pred_files:
+            # Extract model name and fold from filename
+            filename_parts = pred_file.stem.split('_')
+            model_name = '_'.join(filename_parts[:-3])  # Everything before _fold_X_predictions
+            fold = int(filename_parts[-2])
             
-            if target_col not in combined.columns:
-                print(f"Warning: target column {target_col} not found for {pred_col}")
-                continue
+            # Load individual prediction file
+            df = pd.read_csv(pred_file)
             
-            for fold in combined['fold'].unique():
-                fold_data = combined[combined['fold'] == fold]
-                predictions = fold_data[pred_col].values
-                targets = fold_data[target_col].values
+            # Find prediction columns in this file
+            pred_cols = [col for col in df.columns if col.startswith('pred_')]
+            
+            for pred_col in pred_cols:
+                # Extract target type from prediction column
+                # e.g., 'pred_env_gnn_Mstar' -> target_type='Mstar'
+                parts = pred_col.replace('pred_', '').split('_')
+                if len(parts) > 1 and parts[-1] in ['Mstar', 'Mgas']:
+                    target_type = parts[-1]
+                    target_col = f'target_{target_type}'
+                else:
+                    target_col = 'target'
+                    target_type = 'default'
                 
-                # Remove NaN values
-                valid_mask = ~(np.isnan(predictions) | np.isnan(targets))
+                if target_col not in df.columns:
+                    print(f"Warning: target column {target_col} not found for {pred_col}")
+                    continue
+                
+                predictions = df[pred_col].values
+                targets = df[target_col].values
+                
+                # Remove NaN values and missing data (target < 0)
+                valid_mask = ~(np.isnan(predictions) | np.isnan(targets) | (targets < 0))
                 predictions = predictions[valid_mask]
                 targets = targets[valid_mask]
                 

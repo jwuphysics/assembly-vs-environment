@@ -398,23 +398,50 @@ class ExperimentTracker:
         """Evaluate all models with detailed metrics.
         
         Args:
-            metrics: List of metrics to compute ['mse', 'mae', 'r2', 'pearson']
+            metrics: List of metrics to compute ['rmse', 'mae', 'r2', 'pearson']
             
         Returns:
             DataFrame with evaluation results
         """
         if metrics is None:
-            metrics = ['mse', 'mae', 'r2', 'pearson']
+            metrics = ['rmse', 'mae', 'r2', 'pearson']
         
         # Find all prediction files and evaluate each separately
         pred_files = list(self.predictions_dir.glob("*_predictions.csv"))
+        
+        # Also include residual prediction files (different naming pattern)
+        residual_pred_files = list(self.predictions_dir.glob("*residual*.csv"))
+        # Filter out the residual target files (which don't contain predictions)
+        residual_pred_files = [f for f in residual_pred_files if not f.stem.startswith('residuals_')]
+        pred_files.extend(residual_pred_files)
         
         results = []
         for pred_file in pred_files:
             # Extract model name and fold from filename
             filename_parts = pred_file.stem.split('_')
-            model_name = '_'.join(filename_parts[:-3])  # Everything before _fold_X_predictions
-            fold = int(filename_parts[-2])
+            
+            if '_predictions' in pred_file.stem:
+                # Standard naming: model_fold_X_predictions.csv
+                model_name = '_'.join(filename_parts[:-3])  # Everything before _fold_X_predictions
+                fold = int(filename_parts[-2])
+            elif 'residual' in pred_file.stem:
+                # Residual naming: predictions_basemodel_residuals-residualmodel-fold.csv
+                if '-' in pred_file.stem:
+                    # Extract fold from end (e.g., -3of3 or -1of3)
+                    fold_part = pred_file.stem.split('-')[-1]
+                    if 'of' in fold_part:
+                        fold = int(fold_part.split('of')[0]) - 1  # Convert to 0-based indexing
+                    else:
+                        fold = 0  # Default fold
+                    # Extract residual model name
+                    model_name = pred_file.stem.split('-')[1] + '_residual'
+                else:
+                    fold = 0
+                    model_name = 'residual_model'
+            else:
+                # Fallback
+                model_name = pred_file.stem
+                fold = 0
             
             # Load individual prediction file
             df = pd.read_csv(pred_file)
@@ -456,8 +483,8 @@ class ExperimentTracker:
                     'n_samples': len(predictions)
                 }
                 
-                if 'mse' in metrics:
-                    fold_metrics['mse'] = np.mean((predictions - targets) ** 2)
+                if 'rmse' in metrics:
+                    fold_metrics['rmse'] = np.sqrt(np.mean((predictions - targets) ** 2))
                 if 'mae' in metrics:
                     fold_metrics['mae'] = np.mean(np.abs(predictions - targets))
                 if 'r2' in metrics:
@@ -496,9 +523,9 @@ class ExperimentTracker:
         if eval_file.exists():
             eval_df = pd.read_csv(eval_file)
             summary['best_models'] = {}
-            for metric in ['mse', 'mae', 'r2', 'pearson']:
+            for metric in ['rmse', 'mae', 'r2', 'pearson']:
                 if metric in eval_df.columns:
-                    if metric in ['mse', 'mae']:  # Lower is better
+                    if metric in ['rmse', 'mae']:  # Lower is better
                         best_idx = eval_df.groupby('model')[metric].mean().idxmin()
                     else:  # Higher is better
                         best_idx = eval_df.groupby('model')[metric].mean().idxmax()
@@ -538,28 +565,27 @@ def setup_comparison_experiment(experiment_name: str,
 
 def run_residual_experiment(base_experiment: str, base_model: str, 
                           residual_experiment: str) -> ExperimentTracker:
-    """Set up a residual learning experiment.
+    """Set up a residual learning experiment in the same directory as base experiment.
     
     Args:
         base_experiment: Name of experiment with base model predictions
         base_model: Name of base model to compute residuals from
-        residual_experiment: Name of new experiment for residual learning
+        residual_experiment: Name for residual experiment (ignored, kept for compatibility)
         
     Returns:
-        New ExperimentTracker for residual learning
+        Base ExperimentTracker (residual results stored alongside base results)
     """
     # Load base experiment
     base_tracker = ExperimentTracker(base_experiment)
     
-    # Create residual targets
-    residual_data = base_tracker.create_residual_targets(base_model)
+    # Create residual targets if they don't exist
+    residual_file = base_tracker.predictions_dir / f"residuals_{base_model}.csv"
+    if not residual_file.exists():
+        residual_data = base_tracker.create_residual_targets(base_model)
+        print(f"Created residual targets for {base_model}")
+    else:
+        print(f"Using existing residual targets for {base_model}")
     
-    # Set up new experiment
-    residual_tracker = ExperimentTracker(residual_experiment)
-    
-    # Copy splits from base experiment
-    import shutil
-    shutil.copy2(base_tracker.splits_file, residual_tracker.splits_file)
-    
-    print(f"Residual experiment '{residual_experiment}' set up based on '{base_experiment}'")
-    return residual_tracker
+    print(f"Residual experiment set up in '{base_experiment}' directory")
+    print(f"Residual model predictions will be saved with '_residual_{base_model}' suffix")
+    return base_tracker

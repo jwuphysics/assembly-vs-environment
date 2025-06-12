@@ -240,10 +240,8 @@ def train_merger_gnn_tracked(experiment_name: str, fold: int = None,
         if base_model is None:
             raise ValueError("base_model must be specified for residual_mode")
         # Load residual targets from the base experiment
-        # The residual data is saved in the base experiment's predictions directory
-        base_experiment_name = experiment_name.split('_residuals_')[0]
-        base_tracker = ExperimentTracker(base_experiment_name)
-        residual_file = base_tracker.predictions_dir / f"residuals_{base_model}.csv"
+        # The residual data is saved in the current experiment's predictions directory
+        residual_file = tracker.predictions_dir / f"residuals_{base_model}.csv"
         
         if not residual_file.exists():
             raise FileNotFoundError(f"Residual data not found: {residual_file}")
@@ -327,17 +325,20 @@ def train_merger_gnn_tracked(experiment_name: str, fold: int = None,
             'best_valid_loss': best_loss
         }
         
-        tracker.record_model_training('merger_gnn', k, config, final_metrics, model)
+        # Determine model name based on residual mode
+        model_name = f'merger_gnn_residual_{base_model}' if residual_mode else 'merger_gnn'
+        
+        tracker.record_model_training(model_name, k, config, final_metrics, model)
         
         # Save predictions
         pred_file = tracker.save_predictions(
-            'merger_gnn', k, best_predictions, best_targets, best_ids
+            model_name, k, best_predictions, best_targets, best_ids
         )
         
         results[f'fold_{k}'] = {
             'final_metrics': final_metrics,
             'predictions_file': pred_file,
-            'model_file': tracker.models_dir / f"merger_gnn_fold_{k}.pth"
+            'model_file': tracker.models_dir / f"{model_name}_fold_{k}.pth"
         }
         
         print(f"Fold {k} complete - Best validation loss: {best_loss:.5f}")
@@ -525,7 +526,7 @@ def run_comparison_experiment(experiment_name: str, models: List[str] = None) ->
 
 def run_residual_experiment(base_experiment: str, base_model: str, 
                           residual_models: List[str] = None) -> ExperimentTracker:
-    """Run residual learning experiment.
+    """Run residual learning experiment in the same directory as base experiment.
     
     Args:
         base_experiment: Name of experiment with base model predictions
@@ -533,25 +534,23 @@ def run_residual_experiment(base_experiment: str, base_model: str,
         residual_models: Models to train on residuals
         
     Returns:
-        ExperimentTracker for residual experiment
+        ExperimentTracker for base experiment (residual results stored alongside)
     """
     if residual_models is None:
         residual_models = ['merger_gnn']
     
-    residual_experiment_name = f"{base_experiment}_residuals_{base_model}"
-    
-    print(f"Starting residual experiment: {residual_experiment_name}")
+    print(f"Starting residual experiment in: {base_experiment}")
     print(f"Base model: {base_model}")
     print(f"Residual models: {residual_models}")
     
-    # Set up residual experiment
+    # Set up residual experiment (uses same tracker as base experiment)
     from experiment_tracker import run_residual_experiment as setup_residual
-    tracker = setup_residual(base_experiment, base_model, residual_experiment_name)
+    tracker = setup_residual(base_experiment, base_model, f"{base_experiment}_residuals_{base_model}")
     
     # Train residual models
     if 'merger_gnn' in residual_models:
         merger_results = train_merger_gnn_tracked(
-            residual_experiment_name, 
+            base_experiment, 
             residual_mode=True, 
             base_model=base_model
         )

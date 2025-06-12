@@ -50,7 +50,7 @@ def main():
                 print(f"\n--- {target_type} predictions ---")
                 target_results = eval_results[eval_results['target_type'] == target_type]
                 summary_stats = target_results.groupby('model').agg({
-                    'mse': ['mean', 'std'],
+                    'rmse': ['mean', 'std'],
                     'mae': ['mean', 'std'], 
                     'r2': ['mean', 'std'],
                     'pearson': ['mean', 'std']
@@ -59,12 +59,13 @@ def main():
         else:
             # Fallback for single-output case
             summary_stats = eval_results.groupby('model').agg({
-                'mse': ['mean', 'std'],
+                'rmse': ['mean', 'std'],
                 'mae': ['mean', 'std'], 
                 'r2': ['mean', 'std'],
                 'pearson': ['mean', 'std']
             }).round(4)
             print(summary_stats)
+        
         
     elif args.residual_only:
         # Run only residual experiment using existing base model

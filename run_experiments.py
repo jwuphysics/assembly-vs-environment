@@ -26,6 +26,8 @@ def main():
                        help="Models to train")
     parser.add_argument("--residual", action="store_true",
                        help="Run residual experiment after main experiment")
+    parser.add_argument("--residual-only", action="store_true",
+                       help="Only run residual experiment using existing base model")
     parser.add_argument("--base-model", type=str, default="env_gnn",
                        help="Base model for residual learning")
     parser.add_argument("--evaluate-only", action="store_true",
@@ -48,6 +50,16 @@ def main():
             'pearson': ['mean', 'std']
         }).round(4)
         print(summary_stats)
+        
+    elif args.residual_only:
+        # Run only residual experiment using existing base model
+        print(f"Running residual-only experiment using base model: {args.base_model}")
+        residual_tracker = run_residual_experiment(
+            args.experiment, 
+            args.base_model, 
+            ["merger_gnn"]
+        )
+        print(f"\nResidual experiment complete! Results saved in: {residual_tracker.exp_dir}")
         
     else:
         # Run full comparison experiment

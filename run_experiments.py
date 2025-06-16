@@ -34,13 +34,15 @@ def main():
                        help="Only evaluate existing experiment results")
     parser.add_argument("--min-stellar-mass", type=float, default=None,
                        help="Minimum stellar mass cut (log10 scale) for evaluation")
+    parser.add_argument("--only-centrals", action="store_true",
+                       help="Only evaluate central galaxies for fair model comparison")
     
     args = parser.parse_args()
     
     if args.evaluate_only:
         # Just evaluate existing results
         tracker = ExperimentTracker(args.experiment)
-        eval_results = tracker.evaluate_models(min_stellar_mass=args.min_stellar_mass)
+        eval_results = tracker.evaluate_models(min_stellar_mass=args.min_stellar_mass, only_centrals=args.only_centrals)
         print("Evaluation complete!")
         
         # Print summary table separated by target type

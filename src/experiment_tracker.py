@@ -394,15 +394,38 @@ class ExperimentTracker:
         print(f"Created residual targets: {residual_file}")
         return combined
     
-    def evaluate_models(self, metrics: List[str] = None, min_stellar_mass: Optional[float] = None) -> pd.DataFrame:
+    def evaluate_models(self, metrics: List[str] = None, min_stellar_mass: Optional[float] = None, 
+                       only_centrals: bool = False) -> pd.DataFrame:
         """Evaluate all models with detailed metrics.
         
         Args:
             metrics: List of metrics to compute ['rmse', 'mae', 'r2', 'pearson']
-            min_stellar_mass: Minimum stellar mass cut (log10 scale) for evaluation
+            min_stellar_mass: Minimum stellar mass cut (log10 scale) for evaluation.
+                            Only applied to stellar mass (Mstar) evaluations, leaving
+                            gas mass (Mgas) evaluations unchanged.
+            only_centrals: If True, only evaluate central galaxies. This ensures
+                         fair comparison between models when merger tree GNN was
+                         trained only on centrals (only_centrals=True).
             
         Returns:
             DataFrame with evaluation results
+            
+        Examples:
+            >>> tracker = ExperimentTracker("my_experiment")
+            >>> 
+            >>> # Evaluate all galaxies (default)
+            >>> results_all = tracker.evaluate_models()
+            >>> 
+            >>> # Fair comparison: centrals only (matches merger tree training)
+            >>> results_centrals = tracker.evaluate_models(only_centrals=True)
+            >>> 
+            >>> # High-mass centrals only
+            >>> results_high_mass_centrals = tracker.evaluate_models(
+            ...     min_stellar_mass=10.0, only_centrals=True)
+            >>> 
+            >>> # Compare performance across mass ranges
+            >>> low_mass = tracker.evaluate_models(min_stellar_mass=8.5)
+            >>> high_mass = tracker.evaluate_models(min_stellar_mass=10.5)
         """
         if metrics is None:
             metrics = ['rmse', 'mae', 'r2', 'pearson']
@@ -475,6 +498,13 @@ class ExperimentTracker:
                 if min_stellar_mass is not None and target_type == 'Mstar':
                     stellar_mass_mask = targets >= min_stellar_mass
                     valid_mask = valid_mask & stellar_mass_mask
+                
+                # Apply centrals-only filter if specified
+                if only_centrals and 'is_central' in df.columns:
+                    centrals_mask = df['is_central'].values.astype(bool)
+                    valid_mask = valid_mask & centrals_mask
+                elif only_centrals:
+                    print(f"Warning: only_centrals=True but 'is_central' column not found in {pred_col}")
                 
                 predictions = predictions[valid_mask]
                 targets = targets[valid_mask]

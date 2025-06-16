@@ -330,9 +330,14 @@ def train_merger_gnn_tracked(experiment_name: str, fold: int = None,
         
         tracker.record_model_training(model_name, k, config, final_metrics, model)
         
+        # Prepare additional data including is_central information
+        additional_data = {
+            'is_central': [valid_trees[i].is_central for i in range(len(valid_trees))],
+        }
+        
         # Save predictions
         pred_file = tracker.save_predictions(
-            model_name, k, best_predictions, best_targets, best_ids
+            model_name, k, best_predictions, best_targets, best_ids, additional_data
         )
         
         results[f'fold_{k}'] = {
@@ -446,9 +451,15 @@ def train_mlp_tracked(experiment_name: str, fold: int = None) -> Dict[str, Any]:
         # Get subhalo IDs for the validation set
         subhalo_ids = data.subhalo_id[valid_indices].numpy()
         
+        # Prepare additional data for MLP predictions
+        additional_data = {
+            'subhalo_id': subhalo_ids,
+            'is_central': data.is_central[valid_indices].numpy().astype(int),
+        }
+        
         # Save predictions
         pred_file = tracker.save_predictions(
-            'mlp', k, best_predictions, best_targets, subhalo_ids
+            'mlp', k, best_predictions, best_targets, subhalo_ids, additional_data
         )
         
         results[f'fold_{k}'] = {

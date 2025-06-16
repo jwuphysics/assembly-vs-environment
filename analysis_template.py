@@ -30,17 +30,21 @@ def analyze_experiment(experiment_name: str, min_stellar_mass: float = None, onl
     summary = tracker.get_experiment_summary()
     print(f"Models trained: {list(summary['metadata']['models'].keys())}")
     
-    # Load all predictions
+    # Load all predictions using comprehensive combined approach
+    # This automatically matches all models (including residuals) by subhalo_id
     try:
         combined = tracker.combine_all_predictions()
         print(f"Total predictions: {len(combined)}")
         print(f"Prediction columns: {[col for col in combined.columns if col.startswith('pred_')]}")
+        print(f"Unique galaxies: {combined['subhalo_id'].nunique()}")
     except Exception as e:
         print(f"Error loading predictions: {e}")
         return
     
-    # Evaluate models
-    eval_results = tracker.evaluate_models(['mse', 'mae', 'r2', 'pearson'], min_stellar_mass=min_stellar_mass, only_centrals=only_centrals)
+    # Evaluate models using fast combined evaluation
+    eval_results = tracker.evaluate_models(['mse', 'mae', 'r2', 'pearson'], 
+                                          min_stellar_mass=min_stellar_mass, 
+                                          only_centrals=only_centrals)
     
     # Print performance summary
     print("\n=== Model Performance (Mean ± Std) ===")

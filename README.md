@@ -129,6 +129,10 @@ from src.experiment_tracker import ExperimentTracker
 
 tracker = ExperimentTracker("my_experiment")
 
+# Get comprehensive results table with all predictions matched by subhalo_id
+combined = tracker.combine_all_predictions()
+print(f"Combined results: {len(combined)} galaxies, {len(combined.columns)} columns")
+
 # Load specific model predictions
 env_preds = tracker.load_predictions("env_gnn", fold=0)
 merger_preds = tracker.load_predictions("merger_gnn", fold=0)
@@ -142,6 +146,7 @@ residuals = tracker.create_residual_targets("env_gnn")
 - **Multi-Output Predictions**: Simultaneously predict stellar mass and gas mass with uncertainty estimates
 - **Consistent Splits**: Same train/validation splits across all models
 - **Detailed Tracking**: Every prediction saved with metadata for analysis
+- **Comprehensive Results**: All predictions (including residuals) combined in single table matched by subhalo_id
 - **Selective Evaluation**: Apply stellar mass cuts during evaluation without retraining
 - **Configurable**: Easy to modify hyperparameters and add new models
 - **Portable**: No hardcoded paths, works on any system
@@ -167,7 +172,7 @@ from src.experiment_tracker import ExperimentTracker
 
 tracker = ExperimentTracker("my_experiment")
 
-# Evaluate all galaxies (default)
+# Evaluate all galaxies (default - uses fast combined approach)
 results_all = tracker.evaluate_models()
 
 # Fair comparison: centrals only (matches merger tree training)
@@ -175,6 +180,9 @@ results_centrals = tracker.evaluate_models(only_centrals=True)
 
 # High-mass centrals for fair comparison
 results_fair = tracker.evaluate_models(min_stellar_mass=10.0, only_centrals=True)
+
+# Use legacy individual file method if needed
+results_legacy = tracker.evaluate_models(use_combined=False)
 ```
 
 ## Output Format

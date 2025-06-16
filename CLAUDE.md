@@ -105,8 +105,10 @@ from src.experiment_tracker import ExperimentTracker
 # Load experiment results
 tracker = ExperimentTracker("my_comparison")
 
-# Get all predictions in one DataFrame
+# Get comprehensive results table with ALL predictions matched by subhalo_id
+# Includes: standard models, residual models, all metadata, matched across folds
 combined = tracker.combine_all_predictions()
+print(f"Combined: {len(combined)} galaxies, {len(combined.columns)} columns")
 
 # Evaluate all models
 results = tracker.evaluate_models(['mse', 'mae', 'r2', 'pearson'])

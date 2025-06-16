@@ -453,7 +453,6 @@ def train_mlp_tracked(experiment_name: str, fold: int = None) -> Dict[str, Any]:
         
         # Prepare additional data for MLP predictions
         additional_data = {
-            'subhalo_id': subhalo_ids,
             'is_central': data.is_central[valid_indices].numpy().astype(int),
         }
         

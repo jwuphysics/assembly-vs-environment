@@ -280,6 +280,13 @@ class ExperimentTracker:
             'index': indices,
         }
         
+        # Ensure we always have a subhalo_id column for consistent merging
+        if additional_data and 'subhalo_id' in additional_data:
+            df_data['subhalo_id'] = additional_data['subhalo_id']
+        else:
+            # Use indices as subhalo_id if not provided separately
+            df_data['subhalo_id'] = indices
+        
         # Handle multi-output predictions and targets
         if predictions.ndim > 1 and predictions.shape[1] > 1:
             # Multi-output case
@@ -295,7 +302,13 @@ class ExperimentTracker:
         # Add additional columns
         if additional_data:
             for key, values in additional_data.items():
+                if key == 'subhalo_id':
+                    # Skip if we already set subhalo_id from this same data
+                    continue
                 if isinstance(values, (np.ndarray, list)) and len(values) == len(indices):
+                    # Ensure 1D arrays for pandas
+                    if hasattr(values, 'flatten'):
+                        values = values.flatten()
                     df_data[key] = values
         
         df = pd.DataFrame(df_data)
@@ -320,48 +333,128 @@ class ExperimentTracker:
         return pd.read_csv(pred_file)
     
     def combine_all_predictions(self) -> pd.DataFrame:
-        """Combine predictions from all models and folds into a single DataFrame."""
+        """Combine predictions from all models and folds into a single comprehensive DataFrame.
+        
+        This method matches all predictions by subhalo_id and fold, including:
+        - Standard model predictions (MLP, Environment GNN, Merger Tree GNN)
+        - Residual model predictions 
+        - All metadata (features, positions, etc.)
+        
+        Returns:
+            DataFrame with all predictions matched by subhalo_id, with duplicate columns removed
+        """
         all_predictions = []
         
-        # Find all prediction files
+        # Find all prediction files (standard and residual)
         pred_files = list(self.predictions_dir.glob("*_predictions.csv"))
+        
+        # Also include residual prediction files if they exist
+        residual_files = [f for f in self.predictions_dir.glob("*residual*.csv") 
+                         if not f.stem.startswith('residuals_')]
+        pred_files.extend(residual_files)
+        
+        print(f"Found {len(pred_files)} prediction files")
         
         for pred_file in pred_files:
             df = pd.read_csv(pred_file)
+            
             # Extract model name and fold from filename
             filename_parts = pred_file.stem.split('_')
-            model_name = '_'.join(filename_parts[:-3])  # Everything before _fold_X_predictions
-            fold = int(filename_parts[-2])
             
-            # Rename prediction column to be model-specific
-            pred_col = f'pred_{model_name}'
-            if pred_col in df.columns:
-                df = df.rename(columns={pred_col: f'pred_{model_name}'})
+            if '_predictions' in pred_file.stem:
+                # Standard naming: model_fold_X_predictions.csv
+                model_name = '_'.join(filename_parts[:-3])
+                fold = int(filename_parts[-2])
+            elif 'residual' in pred_file.stem:
+                # Residual naming patterns
+                if '-' in pred_file.stem:
+                    fold_part = pred_file.stem.split('-')[-1]
+                    if 'of' in fold_part:
+                        fold = int(fold_part.split('of')[0]) - 1
+                    else:
+                        fold = 0
+                    model_name = pred_file.stem.split('-')[1] + '_residual'
+                else:
+                    fold = 0
+                    model_name = 'residual_model'
+            else:
+                # Fallback
+                model_name = pred_file.stem
+                fold = 0
+            
+            # Add model and fold info to dataframe
+            df['model_name'] = model_name
+            df['fold'] = fold
+            
+            # Ensure we have subhalo_id for matching
+            if 'subhalo_id' not in df.columns:
+                if 'index' in df.columns:
+                    print(f"Warning: No subhalo_id in {pred_file.name}, using index column")
+                    df['subhalo_id'] = df['index']
+                else:
+                    raise ValueError(f"No subhalo_id or index column found in {pred_file.name}")
             
             all_predictions.append(df)
         
         if not all_predictions:
             raise ValueError("No prediction files found")
         
-        # Merge all predictions on index and fold
-        combined = all_predictions[0]
+        print(f"Loaded {len(all_predictions)} prediction files")
         
-        # Determine merge keys based on available columns
-        merge_keys = ['index', 'fold']
-        # Add target columns that exist in all dataframes
+        # Start with the first dataframe
+        combined = all_predictions[0].copy()
+        
+        # Determine merge keys - use subhalo_id as primary key
+        merge_keys = ['subhalo_id', 'fold']
+        
+        # Find common metadata columns to keep (not prediction columns)
+        metadata_cols = []
+        for col in combined.columns:
+            if not col.startswith('pred_') and col not in ['model_name']:
+                # Check if this column exists in all dataframes
+                if all(col in df.columns for df in all_predictions):
+                    metadata_cols.append(col)
+        
+        # Merge all prediction files
+        for i, df in enumerate(all_predictions[1:], 1):
+            print(f"Merging file {i+1}/{len(all_predictions)}")
+            
+            # Merge on subhalo_id and fold
+            combined = combined.merge(
+                df, 
+                on=merge_keys, 
+                how='outer', 
+                suffixes=('', '_dup')
+            )
+            
+            # Remove duplicate columns but keep unique prediction columns
+            dup_cols = [col for col in combined.columns if col.endswith('_dup')]
+            combined = combined.drop(columns=dup_cols)
+        
+        # Clean up and organize columns
+        # Start with merge keys
+        ordered_cols = merge_keys.copy()
+        
+        # Add target columns
         target_cols = [col for col in combined.columns if col.startswith('target_')]
         if not target_cols and 'target' in combined.columns:
             target_cols = ['target']
+        ordered_cols.extend(target_cols)
         
-        for target_col in target_cols:
-            if all(target_col in df.columns for df in all_predictions):
-                merge_keys.append(target_col)
+        # Add prediction columns (sorted for consistency)
+        pred_cols = sorted([col for col in combined.columns if col.startswith('pred_')])
+        ordered_cols.extend(pred_cols)
         
-        for df in all_predictions[1:]:
-            # Merge on common keys, keeping all prediction columns
-            combined = combined.merge(df, on=merge_keys, how='outer', suffixes=('', '_dup'))
-            # Remove duplicate columns
-            combined = combined.loc[:, ~combined.columns.str.endswith('_dup')]
+        # Add remaining metadata columns
+        remaining_cols = [col for col in combined.columns 
+                         if col not in ordered_cols and col != 'model_name']
+        ordered_cols.extend(sorted(remaining_cols))
+        
+        # Reorder columns
+        combined = combined[ordered_cols]
+        
+        print(f"Combined predictions: {len(combined)} galaxies, {len(combined.columns)} columns")
+        print(f"Prediction columns: {len(pred_cols)}")
         
         return combined
     
@@ -395,7 +488,7 @@ class ExperimentTracker:
         return combined
     
     def evaluate_models(self, metrics: List[str] = None, min_stellar_mass: Optional[float] = None, 
-                       only_centrals: bool = False) -> pd.DataFrame:
+                       only_centrals: bool = False, use_combined: bool = True) -> pd.DataFrame:
         """Evaluate all models with detailed metrics.
         
         Args:
@@ -406,6 +499,8 @@ class ExperimentTracker:
             only_centrals: If True, only evaluate central galaxies. This ensures
                          fair comparison between models when merger tree GNN was
                          trained only on centrals (only_centrals=True).
+            use_combined: If True, use combined predictions file for faster evaluation.
+                         If False, use individual prediction files (legacy method).
             
         Returns:
             DataFrame with evaluation results
@@ -430,6 +525,113 @@ class ExperimentTracker:
         if metrics is None:
             metrics = ['rmse', 'mae', 'r2', 'pearson']
         
+        if use_combined:
+            # Use combined predictions for efficient evaluation
+            try:
+                combined = self.combine_all_predictions()
+                results = self._evaluate_from_combined(combined, metrics, min_stellar_mass, only_centrals)
+            except Exception as e:
+                print(f"Failed to use combined evaluation: {e}")
+                print("Falling back to individual file evaluation...")
+                results = self._evaluate_from_individual_files(metrics, min_stellar_mass, only_centrals)
+        else:
+            # Use individual files (legacy method)
+            results = self._evaluate_from_individual_files(metrics, min_stellar_mass, only_centrals)
+        
+        results_df = pd.DataFrame(results)
+        
+        # Save evaluation results
+        eval_file = self.exp_dir / "evaluation_results.csv"
+        results_df.to_csv(eval_file, index=False)
+        
+        print(f"Evaluation results saved: {eval_file}")
+        return results_df
+    
+    def _evaluate_from_combined(self, combined: pd.DataFrame, metrics: List[str], 
+                               min_stellar_mass: Optional[float], only_centrals: bool) -> List[Dict]:
+        """Evaluate models using combined predictions DataFrame."""
+        results = []
+        
+        # Find all prediction columns
+        pred_cols = [col for col in combined.columns if col.startswith('pred_')]
+        
+        print(f"Evaluating {len(pred_cols)} prediction columns from combined data")
+        
+        for pred_col in pred_cols:
+            # Extract model name and target type from prediction column
+            # e.g., 'pred_env_gnn_Mstar' -> model='env_gnn', target_type='Mstar'
+            parts = pred_col.replace('pred_', '').split('_')
+            
+            if len(parts) > 1 and parts[-1] in ['Mstar', 'Mgas']:
+                target_type = parts[-1]
+                model_name = '_'.join(parts[:-1])
+                target_col = f'target_{target_type}'
+            else:
+                target_col = 'target'
+                target_type = 'default'
+                model_name = '_'.join(parts)
+            
+            if target_col not in combined.columns:
+                print(f"Warning: target column {target_col} not found for {pred_col}")
+                continue
+            
+            # Evaluate by fold
+            for fold in combined['fold'].unique():
+                fold_data = combined[combined['fold'] == fold]
+                
+                predictions = fold_data[pred_col].values
+                targets = fold_data[target_col].values
+                
+                # Remove NaN values and missing data (target < 0)
+                valid_mask = ~(np.isnan(predictions) | np.isnan(targets) | (targets < 0))
+                
+                # Apply stellar mass cut if specified and target is stellar mass
+                if min_stellar_mass is not None and target_type == 'Mstar':
+                    stellar_mass_mask = targets >= min_stellar_mass
+                    valid_mask = valid_mask & stellar_mass_mask
+                
+                # Apply centrals-only filter if specified
+                if only_centrals and 'is_central' in fold_data.columns:
+                    centrals_mask = fold_data['is_central'].values.astype(bool)
+                    valid_mask = valid_mask & centrals_mask
+                elif only_centrals:
+                    print(f"Warning: only_centrals=True but 'is_central' column not found in {pred_col}")
+                
+                predictions = predictions[valid_mask]
+                targets = targets[valid_mask]
+                
+                if len(predictions) == 0:
+                    continue
+                
+                # Calculate metrics
+                fold_metrics = {
+                    'model': model_name, 
+                    'target_type': target_type,
+                    'fold': fold, 
+                    'n_samples': len(predictions)
+                }
+                
+                if 'rmse' in metrics:
+                    fold_metrics['rmse'] = np.sqrt(np.mean((predictions - targets) ** 2))
+                if 'mae' in metrics:
+                    fold_metrics['mae'] = np.mean(np.abs(predictions - targets))
+                if 'r2' in metrics:
+                    ss_res = np.sum((targets - predictions) ** 2)
+                    ss_tot = np.sum((targets - np.mean(targets)) ** 2)
+                    fold_metrics['r2'] = 1 - (ss_res / (ss_tot + 1e-8))
+                if 'pearson' in metrics:
+                    correlation = np.corrcoef(predictions, targets)[0, 1]
+                    fold_metrics['pearson'] = correlation
+                
+                results.append(fold_metrics)
+        
+        return results
+    
+    def _evaluate_from_individual_files(self, metrics: List[str], min_stellar_mass: Optional[float], 
+                                       only_centrals: bool) -> List[Dict]:
+        """Evaluate models using individual prediction files (legacy method)."""
+        results = []
+        
         # Find all prediction files and evaluate each separately
         pred_files = list(self.predictions_dir.glob("*_predictions.csv"))
         
@@ -439,7 +641,6 @@ class ExperimentTracker:
         residual_pred_files = [f for f in residual_pred_files if not f.stem.startswith('residuals_')]
         pred_files.extend(residual_pred_files)
         
-        results = []
         for pred_file in pred_files:
             # Extract model name and fold from filename
             filename_parts = pred_file.stem.split('_')
@@ -534,14 +735,7 @@ class ExperimentTracker:
                 
                 results.append(fold_metrics)
         
-        results_df = pd.DataFrame(results)
-        
-        # Save evaluation results
-        eval_file = self.exp_dir / "evaluation_results.csv"
-        results_df.to_csv(eval_file, index=False)
-        
-        print(f"Evaluation results saved: {eval_file}")
-        return results_df
+        return results
     
     def get_experiment_summary(self) -> Dict:
         """Get a summary of the experiment."""
@@ -569,6 +763,165 @@ class ExperimentTracker:
                     summary['best_models'][metric] = best_idx
         
         return summary
+    
+    def fix_prediction_subhalo_ids(self):
+        """Fix existing prediction files to have proper subhalo_id columns.
+        
+        Goes back to the original data sources (cosmic_graphs.pkl, merger_trees.pkl)
+        and maps validation indices to actual subhalo IDs.
+        """
+        print("Fixing subhalo_id columns by mapping back to original data sources...")
+        
+        # Load original data sources
+        try:
+            from .config import RESULTS_DIR
+        except ImportError:
+            from config import RESULTS_DIR
+        
+        # Load cosmic graph data (for env_gnn and mlp)
+        cosmic_data = None
+        try:
+            with open(RESULTS_DIR / "cosmic_graphs.pkl", 'rb') as f:
+                cosmic_data = pickle.load(f)
+            print(f"Loaded cosmic graphs with {len(cosmic_data.subhalo_id)} galaxies")
+        except Exception as e:
+            print(f"Could not load cosmic_graphs.pkl: {e}")
+        
+        # Load merger tree data (for merger_gnn)
+        merger_data = None
+        try:
+            with open(RESULTS_DIR / "merger_trees.pkl", "rb") as f:
+                merger_data = pickle.load(f)
+            print(f"Loaded {len(merger_data)} merger trees")
+        except Exception as e:
+            print(f"Could not load merger_trees.pkl: {e}")
+        
+        # Load the data splits to understand the mapping
+        if not self.splits_file.exists():
+            print("No splits file found - cannot map indices to subhalo IDs")
+            return
+        
+        with open(self.splits_file, 'rb') as f:
+            splits_data = pickle.load(f)
+        splits = splits_data['splits']
+        
+        # Fix all prediction files
+        pred_files = list(self.predictions_dir.glob("*_predictions.csv"))
+        
+        for pred_file in pred_files:
+            print(f"Processing {pred_file.name}")
+            df = pd.read_csv(pred_file)
+            
+            if 'subhalo_id' in df.columns:
+                print(f"  Already has subhalo_id column")
+                continue
+            
+            if 'index' not in df.columns:
+                print(f"  No index column found, skipping")
+                continue
+            
+            # Determine data source and mapping strategy
+            if 'env_gnn' in pred_file.name or 'mlp' in pred_file.name:
+                # These use cosmic graph data
+                if cosmic_data is None:
+                    print(f"  Cannot fix {pred_file.name} - cosmic graph data not available")
+                    continue
+                
+                # Map validation indices to subhalo IDs
+                subhalo_ids = []
+                for _, row in df.iterrows():
+                    fold = int(row['fold'])
+                    val_idx = int(row['index'])
+                    
+                    # Get the validation indices for this fold
+                    valid_indices = splits[fold]['valid']
+                    
+                    # Map validation index to actual cosmic graph index
+                    if val_idx < len(valid_indices):
+                        cosmic_idx = valid_indices[val_idx]
+                        subhalo_id = cosmic_data.subhalo_id[cosmic_idx].item()
+                    else:
+                        print(f"    Warning: validation index {val_idx} out of range for fold {fold}")
+                        subhalo_id = -1
+                    
+                    subhalo_ids.append(subhalo_id)
+                
+                df['subhalo_id'] = subhalo_ids
+                print(f"  Added subhalo_id using cosmic graph mapping")
+                
+            elif 'merger_gnn' in pred_file.name:
+                # These use merger tree data
+                if merger_data is None:
+                    print(f"  Cannot fix {pred_file.name} - merger tree data not available")
+                    continue
+                
+                # Need to recreate the filtering logic from training
+                try:
+                    from .config import get_model_config
+                except ImportError:
+                    from config import get_model_config
+                
+                config = get_model_config('merger_gnn')
+                
+                # Filter trees like in training
+                if config['only_centrals']:
+                    valid_mask = [tree.is_central and tree.y[0, 0] > config['minimum_root_stellar_mass'] for tree in merger_data]
+                else:
+                    valid_mask = [tree.y[0, 0] > config['minimum_root_stellar_mass'] for tree in merger_data]
+                
+                filtered_trees = [tree for i, tree in enumerate(merger_data) if valid_mask[i]]
+                valid_original_indices = [i for i, mask in enumerate(valid_mask) if mask]
+                
+                # Create mapping from original indices to filtered indices
+                index_mapping = {orig_idx: new_idx for new_idx, orig_idx in enumerate(valid_original_indices)}
+                
+                # Map validation indices to subhalo IDs
+                subhalo_ids = []
+                for _, row in df.iterrows():
+                    fold = int(row['fold'])
+                    val_idx = int(row['index'])
+                    
+                    # Get the validation indices for this fold (on original trees)
+                    original_valid_indices = splits[fold]['valid']
+                    
+                    # Map to filtered indices, then to trees
+                    mapped_indices = [index_mapping[i] for i in original_valid_indices if i in index_mapping]
+                    
+                    if val_idx < len(mapped_indices):
+                        tree_idx = mapped_indices[val_idx]
+                        if tree_idx < len(filtered_trees):
+                            # Get subhalo ID from tree (try different attribute names)
+                            tree = filtered_trees[tree_idx]
+                            if hasattr(tree, 'root_subhalo_id'):
+                                subhalo_id = tree.root_subhalo_id
+                            elif hasattr(tree, 'subhalo_id'):
+                                subhalo_id = tree.subhalo_id
+                            elif hasattr(tree, 'SubhaloID'):
+                                subhalo_id = tree.SubhaloID
+                            else:
+                                print(f"    Warning: tree has no recognizable subhalo ID attribute")
+                                subhalo_id = -1
+                        else:
+                            print(f"    Warning: tree index {tree_idx} out of range")
+                            subhalo_id = -1
+                    else:
+                        print(f"    Warning: validation index {val_idx} out of range for fold {fold}")
+                        subhalo_id = -1
+                    
+                    subhalo_ids.append(subhalo_id)
+                
+                df['subhalo_id'] = subhalo_ids
+                print(f"  Added subhalo_id using merger tree mapping")
+            
+            else:
+                print(f"  Unknown file type: {pred_file.name}")
+                continue
+            
+            # Save the fixed file
+            df.to_csv(pred_file, index=False)
+            print(f"  Saved updated {pred_file.name}")
+        
+        print("Finished fixing prediction files")
 
 
 # Convenience functions for common workflows

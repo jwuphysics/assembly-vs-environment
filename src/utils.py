@@ -483,3 +483,17 @@ def count_parameters(model: nn.Module) -> int:
         Number of trainable parameters
     """
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+class SubhaloDataset(torch.utils.data.Dataset):
+    """Simple dataset wrapper for subhalo data used by MLP training."""
+    
+    def __init__(self, X, y):
+        self.X = X
+        self.y = y
+
+    def __len__(self):
+        return len(self.X)
+
+    def __getitem__(self, idx):
+        return self.X[idx], self.y[idx]

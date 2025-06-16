@@ -13,7 +13,7 @@ from pathlib import Path
 # Add src to path for imports
 sys.path.append(str(Path(__file__).parent / "src"))
 
-from train_with_tracking import run_comparison_experiment, run_residual_experiment
+from src.train import run_comparison_experiment, run_residual_experiment
 from experiment_tracker import ExperimentTracker
 
 
@@ -32,13 +32,15 @@ def main():
                        help="Base model for residual learning")
     parser.add_argument("--evaluate-only", action="store_true",
                        help="Only evaluate existing experiment results")
+    parser.add_argument("--min-stellar-mass", type=float, default=None,
+                       help="Minimum stellar mass cut (log10 scale) for evaluation")
     
     args = parser.parse_args()
     
     if args.evaluate_only:
         # Just evaluate existing results
         tracker = ExperimentTracker(args.experiment)
-        eval_results = tracker.evaluate_models()
+        eval_results = tracker.evaluate_models(min_stellar_mass=args.min_stellar_mass)
         print("Evaluation complete!")
         
         # Print summary table separated by target type

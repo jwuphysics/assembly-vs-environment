@@ -18,7 +18,7 @@ sys.path.append(str(Path(__file__).parent / "src"))
 from experiment_tracker import ExperimentTracker
 
 
-def analyze_experiment(experiment_name: str):
+def analyze_experiment(experiment_name: str, min_stellar_mass: float = None):
     """Comprehensive analysis of an experiment."""
     
     print(f"Analyzing experiment: {experiment_name}")
@@ -40,7 +40,7 @@ def analyze_experiment(experiment_name: str):
         return
     
     # Evaluate models
-    eval_results = tracker.evaluate_models(['mse', 'mae', 'r2', 'pearson'])
+    eval_results = tracker.evaluate_models(['mse', 'mae', 'r2', 'pearson'], min_stellar_mass=min_stellar_mass)
     
     # Print performance summary
     print("\n=== Model Performance (Mean ± Std) ===")
@@ -261,8 +261,10 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--experiment", type=str, required=True)
+    parser.add_argument("--min-stellar-mass", type=float, default=None,
+                       help="Minimum stellar mass cut (log10 scale) for evaluation")
     args = parser.parse_args()
     
-    tracker, combined, eval_results = analyze_experiment(args.experiment)
+    tracker, combined, eval_results = analyze_experiment(args.experiment, args.min_stellar_mass)
     create_comparison_plots(combined, tracker.exp_dir / "plots")
     analyze_feature_importance(combined)

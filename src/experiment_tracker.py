@@ -145,9 +145,9 @@ class ExperimentTracker:
                 data = pickle.load(f)
         
         try:
-            from .training_utils import get_spatial_train_valid_indices
+            from .utils import get_spatial_train_valid_indices
         except ImportError:
-            from training_utils import get_spatial_train_valid_indices
+            from utils import get_spatial_train_valid_indices
         
         splits = {}
         for k in range(K_FOLDS):
@@ -394,11 +394,12 @@ class ExperimentTracker:
         print(f"Created residual targets: {residual_file}")
         return combined
     
-    def evaluate_models(self, metrics: List[str] = None) -> pd.DataFrame:
+    def evaluate_models(self, metrics: List[str] = None, min_stellar_mass: Optional[float] = None) -> pd.DataFrame:
         """Evaluate all models with detailed metrics.
         
         Args:
             metrics: List of metrics to compute ['rmse', 'mae', 'r2', 'pearson']
+            min_stellar_mass: Minimum stellar mass cut (log10 scale) for evaluation
             
         Returns:
             DataFrame with evaluation results
@@ -469,6 +470,12 @@ class ExperimentTracker:
                 
                 # Remove NaN values and missing data (target < 0)
                 valid_mask = ~(np.isnan(predictions) | np.isnan(targets) | (targets < 0))
+                
+                # Apply stellar mass cut if specified and target is stellar mass
+                if min_stellar_mass is not None and target_type == 'Mstar':
+                    stellar_mass_mask = targets >= min_stellar_mass
+                    valid_mask = valid_mask & stellar_mass_mask
+                
                 predictions = predictions[valid_mask]
                 targets = targets[valid_mask]
                 

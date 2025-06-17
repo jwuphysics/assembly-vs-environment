@@ -518,9 +518,8 @@ class ExperimentTracker:
         if metrics is None:
             metrics = ['rmse', 'mae', 'nmad', 'r2', 'pearson']
         
-        # Find all prediction files (exclude residual files)
-        pred_files = [f for f in self.predictions_dir.glob('*_predictions.csv') 
-                      if 'residual' not in f.name]
+        # Find all prediction files (include residual files)
+        pred_files = list(self.predictions_dir.glob('*_predictions.csv'))
         
         print(f"Evaluating {len(pred_files)} prediction files")
         

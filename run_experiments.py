@@ -13,7 +13,7 @@ from pathlib import Path
 # Add src to path for imports
 sys.path.append(str(Path(__file__).parent / "src"))
 
-from train_with_tracking import run_comparison_experiment, run_residual_experiment
+from src.train import run_comparison_experiment, run_residual_experiment
 from experiment_tracker import ExperimentTracker
 
 
@@ -32,13 +32,17 @@ def main():
                        help="Base model for residual learning")
     parser.add_argument("--evaluate-only", action="store_true",
                        help="Only evaluate existing experiment results")
+    parser.add_argument("--min-stellar-mass", type=float, default=None,
+                       help="Minimum stellar mass cut (log10 scale) for evaluation")
+    parser.add_argument("--only-centrals", action="store_true",
+                       help="Only evaluate central galaxies for fair model comparison")
     
     args = parser.parse_args()
     
     if args.evaluate_only:
         # Just evaluate existing results
         tracker = ExperimentTracker(args.experiment)
-        eval_results = tracker.evaluate_models()
+        eval_results = tracker.evaluate_models(min_stellar_mass=args.min_stellar_mass, only_centrals=args.only_centrals)
         print("Evaluation complete!")
         
         # Print summary table separated by target type
@@ -51,7 +55,8 @@ def main():
                 target_results = eval_results[eval_results['target_type'] == target_type]
                 summary_stats = target_results.groupby('model').agg({
                     'rmse': ['mean', 'std'],
-                    'mae': ['mean', 'std'], 
+                    'mae': ['mean', 'std'],
+                    'nmad': ['mean', 'std'],
                     'r2': ['mean', 'std'],
                     'pearson': ['mean', 'std']
                 }).round(4)
@@ -60,7 +65,8 @@ def main():
             # Fallback for single-output case
             summary_stats = eval_results.groupby('model').agg({
                 'rmse': ['mean', 'std'],
-                'mae': ['mean', 'std'], 
+                'mae': ['mean', 'std'],
+                'nmad': ['mean', 'std'],
                 'r2': ['mean', 'std'],
                 'pearson': ['mean', 'std']
             }).round(4)

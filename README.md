@@ -70,9 +70,9 @@ src/
 ├── data.py                 # TNG data loading utilities  
 ├── loader.py               # Graph construction and data preparation
 ├── model.py                # Neural network architectures
-├── training_utils.py       # Shared training/validation functions
+├── utils.py                # Shared training/validation functions
 ├── experiment_tracker.py   # Experiment management and tracking
-└── train_with_tracking.py  # High-level training workflows
+└── train.py                # High-level training workflows
 
 run_experiments.py          # Main experiment runner
 analysis_template.py        # Result analysis and visualization
@@ -101,7 +101,7 @@ mlp_config = get_model_config('mlp')
 
 ### Basic Comparison
 ```python
-from src.train_with_tracking import run_comparison_experiment
+from src.train import run_comparison_experiment
 
 # Train all models with consistent splits
 tracker = run_comparison_experiment("my_experiment", ["mlp", "env_gnn", "merger_gnn"])
@@ -113,7 +113,7 @@ eval_results = tracker.evaluate_models()
 
 ### Residual Learning
 ```python
-from src.train_with_tracking import run_residual_experiment
+from src.train import run_residual_experiment
 
 # Train merger tree GNN on environment GNN residuals
 residual_tracker = run_residual_experiment(
@@ -129,6 +129,10 @@ from src.experiment_tracker import ExperimentTracker
 
 tracker = ExperimentTracker("my_experiment")
 
+# Get comprehensive results table with all predictions matched by subhalo_id
+combined = tracker.combine_all_predictions()
+print(f"Combined results: {len(combined)} galaxies, {len(combined.columns)} columns")
+
 # Load specific model predictions
 env_preds = tracker.load_predictions("env_gnn", fold=0)
 merger_preds = tracker.load_predictions("merger_gnn", fold=0)
@@ -142,9 +146,44 @@ residuals = tracker.create_residual_targets("env_gnn")
 - **Multi-Output Predictions**: Simultaneously predict stellar mass and gas mass with uncertainty estimates
 - **Consistent Splits**: Same train/validation splits across all models
 - **Detailed Tracking**: Every prediction saved with metadata for analysis
+- **Comprehensive Results**: All predictions (including residuals) combined in single table matched by subhalo_id
+- **Selective Evaluation**: Apply stellar mass cuts during evaluation without retraining
 - **Configurable**: Easy to modify hyperparameters and add new models
 - **Portable**: No hardcoded paths, works on any system
 - **Reproducible**: Fixed random seeds and comprehensive logging
+
+## Evaluation Filtering
+
+The framework supports applying filters during evaluation without requiring model retraining. This is useful for:
+
+- **High-mass regime analysis**: Focus on galaxies above specified stellar mass thresholds
+- **Fair model comparison**: Evaluate all models on the same galaxy population
+- **Physical interpretation**: Isolate well-resolved galaxies in simulations
+
+### Available Filters
+
+1. **Stellar Mass Cut**: The stellar mass cut applies only to stellar mass (M_star) evaluations, leaving gas mass (M_gas) evaluations unchanged.
+
+2. **Centrals-Only Filter**: Essential for fair comparison when merger tree GNN was trained only on central galaxies (`only_centrals=True`). This ensures all models are evaluated on the same population.
+
+```python
+# Programmatic usage
+from src.experiment_tracker import ExperimentTracker
+
+tracker = ExperimentTracker("my_experiment")
+
+# Evaluate all galaxies (default - uses fast combined approach)
+results_all = tracker.evaluate_models()
+
+# Fair comparison: centrals only (matches merger tree training)
+results_centrals = tracker.evaluate_models(only_centrals=True)
+
+# High-mass centrals for fair comparison
+results_fair = tracker.evaluate_models(min_stellar_mass=10.0, only_centrals=True)
+
+# Use legacy individual file method if needed
+results_legacy = tracker.evaluate_models(use_combined=False)
+```
 
 ## Output Format
 
@@ -164,6 +203,8 @@ The main experiment runner supports these options:
 - `--residual-only`: Only run residual experiment using existing base model
 - `--base-model MODEL`: Base model for residual learning (default: env_gnn)
 - `--evaluate-only`: Only evaluate existing experiment results
+- `--min-stellar-mass MASS`: Minimum stellar mass cut (log₁₀ scale) for evaluation
+- `--only-centrals`: Only evaluate central galaxies for fair model comparison
 
 ### Examples
 
@@ -173,6 +214,15 @@ python run_experiments.py --experiment "my_test" --models mlp env_gnn merger_gnn
 
 # Evaluate existing experiment
 python run_experiments.py --experiment "my_test" --evaluate-only
+
+# Evaluate with stellar mass cut (only galaxies with log₁₀(M_star) ≥ 10.0)
+python run_experiments.py --experiment "my_test" --evaluate-only --min-stellar-mass 10.0
+
+# Fair comparison: evaluate only central galaxies (matches merger tree training)
+python run_experiments.py --experiment "my_test" --evaluate-only --only-centrals
+
+# High-mass centrals only for fair comparison
+python run_experiments.py --experiment "my_test" --evaluate-only --min-stellar-mass 10.0 --only-centrals
 
 # Train residual model on existing base predictions  
 python run_experiments.py --experiment "my_test" --residual-only --base-model env_gnn

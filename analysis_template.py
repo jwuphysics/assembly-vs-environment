@@ -18,7 +18,7 @@ sys.path.append(str(Path(__file__).parent / "src"))
 from experiment_tracker import ExperimentTracker
 
 
-def analyze_experiment(experiment_name: str):
+def analyze_experiment(experiment_name: str, min_stellar_mass: float = None, only_centrals: bool = False):
     """Comprehensive analysis of an experiment."""
     
     print(f"Analyzing experiment: {experiment_name}")
@@ -30,17 +30,21 @@ def analyze_experiment(experiment_name: str):
     summary = tracker.get_experiment_summary()
     print(f"Models trained: {list(summary['metadata']['models'].keys())}")
     
-    # Load all predictions
+    # Load all predictions using comprehensive combined approach
+    # This automatically matches all models (including residuals) by subhalo_id
     try:
         combined = tracker.combine_all_predictions()
         print(f"Total predictions: {len(combined)}")
         print(f"Prediction columns: {[col for col in combined.columns if col.startswith('pred_')]}")
+        print(f"Unique galaxies: {combined['subhalo_id'].nunique()}")
     except Exception as e:
         print(f"Error loading predictions: {e}")
         return
     
-    # Evaluate models
-    eval_results = tracker.evaluate_models(['mse', 'mae', 'r2', 'pearson'])
+    # Evaluate models using fast combined evaluation
+    eval_results = tracker.evaluate_models(['mse', 'mae', 'r2', 'pearson'], 
+                                          min_stellar_mass=min_stellar_mass, 
+                                          only_centrals=only_centrals)
     
     # Print performance summary
     print("\n=== Model Performance (Mean ± Std) ===")
@@ -261,8 +265,12 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--experiment", type=str, required=True)
+    parser.add_argument("--min-stellar-mass", type=float, default=None,
+                       help="Minimum stellar mass cut (log10 scale) for evaluation")
+    parser.add_argument("--only-centrals", action="store_true",
+                       help="Only evaluate central galaxies for fair model comparison")
     args = parser.parse_args()
     
-    tracker, combined, eval_results = analyze_experiment(args.experiment)
+    tracker, combined, eval_results = analyze_experiment(args.experiment, args.min_stellar_mass, args.only_centrals)
     create_comparison_plots(combined, tracker.exp_dir / "plots")
     analyze_feature_importance(combined)

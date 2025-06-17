@@ -284,9 +284,13 @@ def train_merger_gnn_tracked(experiment_name: str, fold: int = None,
         
         optimizer = configure_optimizer(model, config['lr'], config['weight_decay'])
         
+        # Determine model name for logging (before training loop)
+        model_name = f'merger_gnn_residual_{base_model}' if residual_mode else 'merger_gnn'
+        
         # Set up logging
-        log_file = tracker.logs_dir / f"merger_gnn_fold_{k}.log"
-        logger = TrainingLogger(log_file, f"Merger Tree GNN Fold {k}")
+        log_file = tracker.logs_dir / f"{model_name}_fold_{k}.log"
+        logger_title = f"Merger Tree GNN (Residual {base_model}) Fold {k}" if residual_mode else f"Merger Tree GNN Fold {k}"
+        logger = TrainingLogger(log_file, logger_title)
         logger.write_header()
         
         # Training loop
@@ -325,8 +329,7 @@ def train_merger_gnn_tracked(experiment_name: str, fold: int = None,
             'best_valid_loss': best_loss
         }
         
-        # Determine model name based on residual mode
-        model_name = f'merger_gnn_residual_{base_model}' if residual_mode else 'merger_gnn'
+        # Model name was already determined above for logging
         
         tracker.record_model_training(model_name, k, config, final_metrics, model)
         

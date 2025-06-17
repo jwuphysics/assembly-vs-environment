@@ -40,6 +40,12 @@ def main():
     args = parser.parse_args()
     
     if args.evaluate_only:
+        # show all columns/rows
+        import pandas as pd
+        pd.set_option('display.max_rows', None)
+        pd.set_option('display.max_columns', None)
+        pd.set_option('display.width', 144)
+
         # Just evaluate existing results
         tracker = ExperimentTracker(args.experiment)
         eval_results = tracker.evaluate_models(min_stellar_mass=args.min_stellar_mass, only_centrals=args.only_centrals)

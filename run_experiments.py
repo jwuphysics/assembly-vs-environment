@@ -55,7 +55,8 @@ def main():
                 target_results = eval_results[eval_results['target_type'] == target_type]
                 summary_stats = target_results.groupby('model').agg({
                     'rmse': ['mean', 'std'],
-                    'mae': ['mean', 'std'], 
+                    'mae': ['mean', 'std'],
+                    'nmad': ['mean', 'std'],
                     'r2': ['mean', 'std'],
                     'pearson': ['mean', 'std']
                 }).round(4)
@@ -64,7 +65,8 @@ def main():
             # Fallback for single-output case
             summary_stats = eval_results.groupby('model').agg({
                 'rmse': ['mean', 'std'],
-                'mae': ['mean', 'std'], 
+                'mae': ['mean', 'std'],
+                'nmad': ['mean', 'std'],
                 'r2': ['mean', 'std'],
                 'pearson': ['mean', 'std']
             }).round(4)

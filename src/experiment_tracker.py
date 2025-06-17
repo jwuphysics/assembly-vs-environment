@@ -280,11 +280,12 @@ class ExperimentTracker:
             'index': indices,
         }
         
-        # Ensure we always have a subhalo_id column for consistent merging
+        # Always use actual subhalo_id from additional_data if provided
+        # This ensures consistent matching across all models
         if additional_data and 'subhalo_id' in additional_data:
             df_data['subhalo_id'] = additional_data['subhalo_id']
         else:
-            # Use indices as subhalo_id if not provided separately
+            # Fallback: use indices as subhalo_id if not provided separately
             df_data['subhalo_id'] = indices
         
         # Handle multi-output predictions and targets
@@ -404,8 +405,7 @@ class ExperimentTracker:
         # Start with the first dataframe
         combined = all_predictions[0].copy()
         
-        # Determine merge keys - use subhalo_id as primary key
-        merge_keys = ['subhalo_id', 'fold']
+        merge_keys = ['subhalo_id']
         
         # Find common metadata columns to keep (not prediction columns)
         metadata_cols = []
@@ -419,7 +419,6 @@ class ExperimentTracker:
         for i, df in enumerate(all_predictions[1:], 1):
             print(f"Merging file {i+1}/{len(all_predictions)}")
             
-            # Merge on subhalo_id and fold
             combined = combined.merge(
                 df, 
                 on=merge_keys, 
@@ -488,19 +487,17 @@ class ExperimentTracker:
         return combined
     
     def evaluate_models(self, metrics: List[str] = None, min_stellar_mass: Optional[float] = None, 
-                       only_centrals: bool = False, use_combined: bool = True) -> pd.DataFrame:
-        """Evaluate all models with detailed metrics.
+                       only_centrals: bool = False) -> pd.DataFrame:
+        """Evaluate all models with detailed metrics computed directly from prediction files.
         
         Args:
-            metrics: List of metrics to compute ['rmse', 'mae', 'r2', 'pearson']
+            metrics: List of metrics to compute ['rmse', 'mae', 'nmad', 'r2', 'pearson']
             min_stellar_mass: Minimum stellar mass cut (log10 scale) for evaluation.
                             Only applied to stellar mass (Mstar) evaluations, leaving
                             gas mass (Mgas) evaluations unchanged.
             only_centrals: If True, only evaluate central galaxies. This ensures
                          fair comparison between models when merger tree GNN was
                          trained only on centrals (only_centrals=True).
-            use_combined: If True, use combined predictions file for faster evaluation.
-                         If False, use individual prediction files (legacy method).
             
         Returns:
             DataFrame with evaluation results
@@ -517,26 +514,96 @@ class ExperimentTracker:
             >>> # High-mass centrals only
             >>> results_high_mass_centrals = tracker.evaluate_models(
             ...     min_stellar_mass=10.0, only_centrals=True)
-            >>> 
-            >>> # Compare performance across mass ranges
-            >>> low_mass = tracker.evaluate_models(min_stellar_mass=8.5)
-            >>> high_mass = tracker.evaluate_models(min_stellar_mass=10.5)
         """
         if metrics is None:
-            metrics = ['rmse', 'mae', 'r2', 'pearson']
+            metrics = ['rmse', 'mae', 'nmad', 'r2', 'pearson']
         
-        if use_combined:
-            # Use combined predictions for efficient evaluation
-            try:
-                combined = self.combine_all_predictions()
-                results = self._evaluate_from_combined(combined, metrics, min_stellar_mass, only_centrals)
-            except Exception as e:
-                print(f"Failed to use combined evaluation: {e}")
-                print("Falling back to individual file evaluation...")
-                results = self._evaluate_from_individual_files(metrics, min_stellar_mass, only_centrals)
-        else:
-            # Use individual files (legacy method)
-            results = self._evaluate_from_individual_files(metrics, min_stellar_mass, only_centrals)
+        # Find all prediction files (exclude residual files)
+        pred_files = [f for f in self.predictions_dir.glob('*_predictions.csv') 
+                      if 'residual' not in f.name]
+        
+        print(f"Evaluating {len(pred_files)} prediction files")
+        
+        results = []
+        
+        for pred_file in pred_files:
+            # Extract model name and fold
+            parts = pred_file.stem.split('_')
+            model_name = '_'.join(parts[:-3])
+            fold = int(parts[-2])
+            
+            # Load data
+            df = pd.read_csv(pred_file)
+            
+            # Find prediction and target columns
+            pred_cols = [col for col in df.columns if col.startswith('pred_')]
+            
+            for pred_col in pred_cols:
+                # Determine target type
+                if pred_col.endswith('_Mstar'):
+                    target_col = 'target_Mstar'
+                    target_type = 'Mstar'
+                elif pred_col.endswith('_Mgas'):
+                    target_col = 'target_Mgas' 
+                    target_type = 'Mgas'
+                else:
+                    target_col = 'target'
+                    target_type = 'default'
+                
+                if target_col not in df.columns:
+                    print(f"Warning: {target_col} not found for {pred_col}")
+                    continue
+                
+                # Get predictions and targets
+                y_pred = df[pred_col].values
+                y_true = df[target_col].values
+                
+                # Apply filters
+                valid_mask = np.isfinite(y_true) & np.isfinite(y_pred) & (y_true >= 0)
+                
+                # Apply stellar mass cut if specified and target is stellar mass
+                if min_stellar_mass is not None and target_type == 'Mstar':
+                    stellar_mass_mask = y_true >= min_stellar_mass
+                    valid_mask = valid_mask & stellar_mass_mask
+                
+                # Apply centrals-only filter if specified
+                if only_centrals and 'is_central' in df.columns:
+                    centrals_mask = df['is_central'].values.astype(bool)
+                    valid_mask = valid_mask & centrals_mask
+                elif only_centrals:
+                    print(f"Warning: only_centrals=True but 'is_central' column not found in {pred_col}")
+                
+                # Filter data
+                y_pred = y_pred[valid_mask]
+                y_true = y_true[valid_mask]
+                
+                if len(y_true) == 0:
+                    continue
+                
+                # Compute metrics
+                fold_metrics = {
+                    'model': model_name,
+                    'target_type': target_type,
+                    'fold': fold,
+                    'n_samples': len(y_true)
+                }
+                
+                if 'rmse' in metrics:
+                    fold_metrics['rmse'] = np.sqrt(np.mean((y_true - y_pred) ** 2))
+                if 'mae' in metrics:
+                    fold_metrics['mae'] = np.mean(np.abs(y_true - y_pred))
+                if 'nmad' in metrics:
+                    residuals = y_true - y_pred
+                    fold_metrics['nmad'] = 1.4826 * np.median(np.abs(residuals - np.median(residuals)))
+                if 'r2' in metrics:
+                    ss_res = np.sum((y_true - y_pred) ** 2)
+                    ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
+                    fold_metrics['r2'] = 1 - (ss_res / ss_tot) if ss_tot > 0 else np.nan
+                if 'pearson' in metrics:
+                    correlation = np.corrcoef(y_pred, y_true)[0, 1]
+                    fold_metrics['pearson'] = correlation
+                
+                results.append(fold_metrics)
         
         results_df = pd.DataFrame(results)
         
@@ -547,195 +614,6 @@ class ExperimentTracker:
         print(f"Evaluation results saved: {eval_file}")
         return results_df
     
-    def _evaluate_from_combined(self, combined: pd.DataFrame, metrics: List[str], 
-                               min_stellar_mass: Optional[float], only_centrals: bool) -> List[Dict]:
-        """Evaluate models using combined predictions DataFrame."""
-        results = []
-        
-        # Find all prediction columns
-        pred_cols = [col for col in combined.columns if col.startswith('pred_')]
-        
-        print(f"Evaluating {len(pred_cols)} prediction columns from combined data")
-        
-        for pred_col in pred_cols:
-            # Extract model name and target type from prediction column
-            # e.g., 'pred_env_gnn_Mstar' -> model='env_gnn', target_type='Mstar'
-            parts = pred_col.replace('pred_', '').split('_')
-            
-            if len(parts) > 1 and parts[-1] in ['Mstar', 'Mgas']:
-                target_type = parts[-1]
-                model_name = '_'.join(parts[:-1])
-                target_col = f'target_{target_type}'
-            else:
-                target_col = 'target'
-                target_type = 'default'
-                model_name = '_'.join(parts)
-            
-            if target_col not in combined.columns:
-                print(f"Warning: target column {target_col} not found for {pred_col}")
-                continue
-            
-            # Evaluate by fold
-            for fold in combined['fold'].unique():
-                fold_data = combined[combined['fold'] == fold]
-                
-                predictions = fold_data[pred_col].values
-                targets = fold_data[target_col].values
-                
-                # Remove NaN values and missing data (target < 0)
-                valid_mask = ~(np.isnan(predictions) | np.isnan(targets) | (targets < 0))
-                
-                # Apply stellar mass cut if specified and target is stellar mass
-                if min_stellar_mass is not None and target_type == 'Mstar':
-                    stellar_mass_mask = targets >= min_stellar_mass
-                    valid_mask = valid_mask & stellar_mass_mask
-                
-                # Apply centrals-only filter if specified
-                if only_centrals and 'is_central' in fold_data.columns:
-                    centrals_mask = fold_data['is_central'].values.astype(bool)
-                    valid_mask = valid_mask & centrals_mask
-                elif only_centrals:
-                    print(f"Warning: only_centrals=True but 'is_central' column not found in {pred_col}")
-                
-                predictions = predictions[valid_mask]
-                targets = targets[valid_mask]
-                
-                if len(predictions) == 0:
-                    continue
-                
-                # Calculate metrics
-                fold_metrics = {
-                    'model': model_name, 
-                    'target_type': target_type,
-                    'fold': fold, 
-                    'n_samples': len(predictions)
-                }
-                
-                if 'rmse' in metrics:
-                    fold_metrics['rmse'] = np.sqrt(np.mean((predictions - targets) ** 2))
-                if 'mae' in metrics:
-                    fold_metrics['mae'] = np.mean(np.abs(predictions - targets))
-                if 'r2' in metrics:
-                    ss_res = np.sum((targets - predictions) ** 2)
-                    ss_tot = np.sum((targets - np.mean(targets)) ** 2)
-                    fold_metrics['r2'] = 1 - (ss_res / (ss_tot + 1e-8))
-                if 'pearson' in metrics:
-                    correlation = np.corrcoef(predictions, targets)[0, 1]
-                    fold_metrics['pearson'] = correlation
-                
-                results.append(fold_metrics)
-        
-        return results
-    
-    def _evaluate_from_individual_files(self, metrics: List[str], min_stellar_mass: Optional[float], 
-                                       only_centrals: bool) -> List[Dict]:
-        """Evaluate models using individual prediction files (legacy method)."""
-        results = []
-        
-        # Find all prediction files and evaluate each separately
-        pred_files = list(self.predictions_dir.glob("*_predictions.csv"))
-        
-        # Also include residual prediction files (different naming pattern)
-        residual_pred_files = list(self.predictions_dir.glob("*residual*.csv"))
-        # Filter out the residual target files (which don't contain predictions)
-        residual_pred_files = [f for f in residual_pred_files if not f.stem.startswith('residuals_')]
-        pred_files.extend(residual_pred_files)
-        
-        for pred_file in pred_files:
-            # Extract model name and fold from filename
-            filename_parts = pred_file.stem.split('_')
-            
-            if '_predictions' in pred_file.stem:
-                # Standard naming: model_fold_X_predictions.csv
-                model_name = '_'.join(filename_parts[:-3])  # Everything before _fold_X_predictions
-                fold = int(filename_parts[-2])
-            elif 'residual' in pred_file.stem:
-                # Residual naming: predictions_basemodel_residuals-residualmodel-fold.csv
-                if '-' in pred_file.stem:
-                    # Extract fold from end (e.g., -3of3 or -1of3)
-                    fold_part = pred_file.stem.split('-')[-1]
-                    if 'of' in fold_part:
-                        fold = int(fold_part.split('of')[0]) - 1  # Convert to 0-based indexing
-                    else:
-                        fold = 0  # Default fold
-                    # Extract residual model name
-                    model_name = pred_file.stem.split('-')[1] + '_residual'
-                else:
-                    fold = 0
-                    model_name = 'residual_model'
-            else:
-                # Fallback
-                model_name = pred_file.stem
-                fold = 0
-            
-            # Load individual prediction file
-            df = pd.read_csv(pred_file)
-            
-            # Find prediction columns in this file
-            pred_cols = [col for col in df.columns if col.startswith('pred_')]
-            
-            for pred_col in pred_cols:
-                # Extract target type from prediction column
-                # e.g., 'pred_env_gnn_Mstar' -> target_type='Mstar'
-                parts = pred_col.replace('pred_', '').split('_')
-                if len(parts) > 1 and parts[-1] in ['Mstar', 'Mgas']:
-                    target_type = parts[-1]
-                    target_col = f'target_{target_type}'
-                else:
-                    target_col = 'target'
-                    target_type = 'default'
-                
-                if target_col not in df.columns:
-                    print(f"Warning: target column {target_col} not found for {pred_col}")
-                    continue
-                
-                predictions = df[pred_col].values
-                targets = df[target_col].values
-                
-                # Remove NaN values and missing data (target < 0)
-                valid_mask = ~(np.isnan(predictions) | np.isnan(targets) | (targets < 0))
-                
-                # Apply stellar mass cut if specified and target is stellar mass
-                if min_stellar_mass is not None and target_type == 'Mstar':
-                    stellar_mass_mask = targets >= min_stellar_mass
-                    valid_mask = valid_mask & stellar_mass_mask
-                
-                # Apply centrals-only filter if specified
-                if only_centrals and 'is_central' in df.columns:
-                    centrals_mask = df['is_central'].values.astype(bool)
-                    valid_mask = valid_mask & centrals_mask
-                elif only_centrals:
-                    print(f"Warning: only_centrals=True but 'is_central' column not found in {pred_col}")
-                
-                predictions = predictions[valid_mask]
-                targets = targets[valid_mask]
-                
-                if len(predictions) == 0:
-                    continue
-                
-                # Calculate metrics
-                fold_metrics = {
-                    'model': model_name, 
-                    'target_type': target_type,
-                    'fold': fold, 
-                    'n_samples': len(predictions)
-                }
-                
-                if 'rmse' in metrics:
-                    fold_metrics['rmse'] = np.sqrt(np.mean((predictions - targets) ** 2))
-                if 'mae' in metrics:
-                    fold_metrics['mae'] = np.mean(np.abs(predictions - targets))
-                if 'r2' in metrics:
-                    ss_res = np.sum((targets - predictions) ** 2)
-                    ss_tot = np.sum((targets - np.mean(targets)) ** 2)
-                    fold_metrics['r2'] = 1 - (ss_res / (ss_tot + 1e-8))
-                if 'pearson' in metrics:
-                    correlation = np.corrcoef(predictions, targets)[0, 1]
-                    fold_metrics['pearson'] = correlation
-                
-                results.append(fold_metrics)
-        
-        return results
     
     def get_experiment_summary(self) -> Dict:
         """Get a summary of the experiment."""

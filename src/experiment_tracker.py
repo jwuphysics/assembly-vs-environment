@@ -138,11 +138,16 @@ class ExperimentTracker:
         return splits
     
     def _create_spatial_splits(self, data=None) -> Dict[int, Dict[str, np.ndarray]]:
-        """Create spatial splits for cosmic graph data."""
+        """Create spatial splits for cosmic graph data (full dataset)."""
         if data is None:
-            # Load cosmic graph data
-            with open(RESULTS_DIR / "cosmic_graphs.pkl", 'rb') as f:
-                data = pickle.load(f)
+            # Load full consistent cosmic graph data for Environment GNN/MLP
+            try:
+                from .loader import load_consistent_datasets
+            except ImportError:
+                from loader import load_consistent_datasets
+            
+            # Use full dataset for Environment GNN and MLP splits
+            data, _, _ = load_consistent_datasets()
         
         try:
             from .utils import get_spatial_train_valid_indices
@@ -160,10 +165,25 @@ class ExperimentTracker:
         return splits
     
     def _create_random_splits_trees(self) -> Dict[int, Dict[str, np.ndarray]]:
-        """Create random splits for merger tree data."""
-        # Load merger trees
-        with open(RESULTS_DIR / "merger_trees.pkl", "rb") as f:
-            trees = pickle.load(f)
+        """Create random splits for merger tree data with filtering applied."""
+        # Load consistent merger trees with filtering
+        try:
+            from .loader import load_consistent_datasets, apply_model_specific_filtering
+            from .config import get_model_config
+        except ImportError:
+            from loader import load_consistent_datasets, apply_model_specific_filtering
+            from config import get_model_config
+        
+        # Load base datasets
+        cosmic_graph, merger_trees, subhalos_base = load_consistent_datasets()
+        
+        # Apply merger tree filtering
+        merger_config = get_model_config('merger_gnn')
+        _, trees, _ = apply_model_specific_filtering(
+            cosmic_graph, merger_trees, subhalos_base,
+            minimum_stellar_mass=merger_config.get('minimum_root_stellar_mass'),
+            only_centrals=merger_config.get('only_centrals', False)
+        )
         
         N = len(trees)
         np.random.seed(RANDOM_SEED)
@@ -655,23 +675,36 @@ class ExperimentTracker:
         except ImportError:
             from config import RESULTS_DIR
         
-        # Load cosmic graph data (for env_gnn and mlp)
+        # Load consistent data sources
         cosmic_data = None
-        try:
-            with open(RESULTS_DIR / "cosmic_graphs.pkl", 'rb') as f:
-                cosmic_data = pickle.load(f)
-            print(f"Loaded cosmic graphs with {len(cosmic_data.subhalo_id)} galaxies")
-        except Exception as e:
-            print(f"Could not load cosmic_graphs.pkl: {e}")
-        
-        # Load merger tree data (for merger_gnn)
         merger_data = None
         try:
-            with open(RESULTS_DIR / "merger_trees.pkl", "rb") as f:
-                merger_data = pickle.load(f)
-            print(f"Loaded {len(merger_data)} merger trees")
+            try:
+                from .loader import load_consistent_datasets
+            except ImportError:
+                from loader import load_consistent_datasets
+            
+            # Load base datasets
+            cosmic_data, merger_data, _ = load_consistent_datasets()
+            print(f"Loaded consistent datasets: {len(cosmic_data.subhalo_id)} cosmic, {len(merger_data)} merger")
         except Exception as e:
-            print(f"Could not load merger_trees.pkl: {e}")
+            print(f"Could not load consistent datasets: {e}")
+            # Fallback to old loading method
+            try:
+                with open(RESULTS_DIR / "cosmic_graphs.pkl", 'rb') as f:
+                    cosmic_data = pickle.load(f)
+                print(f"Fallback: loaded cosmic graphs with {len(cosmic_data.subhalo_id)} galaxies")
+            except Exception as e2:
+                print(f"Could not load cosmic_graphs.pkl: {e2}")
+            
+            # Fallback merger tree loading if not already loaded
+            if merger_data is None:
+                try:
+                    with open(RESULTS_DIR / "merger_trees.pkl", "rb") as f:
+                        merger_data = pickle.load(f)
+                    print(f"Fallback: loaded {len(merger_data)} merger trees")
+                except Exception as e3:
+                    print(f"Could not load merger_trees.pkl: {e3}")
         
         # Load the data splits to understand the mapping
         if not self.splits_file.exists():

@@ -30,7 +30,6 @@ try:
         train_epoch_tensor, validate_tensor, configure_optimizer, get_device
     )
     from .experiment_tracker import ExperimentTracker
-    from .loader import prepare_all_data
 except ImportError:
     from model import MultiSAGENet, EdgeInteractionGNN
     from utils import (
@@ -38,7 +37,6 @@ except ImportError:
         train_epoch_tensor, validate_tensor, configure_optimizer, get_device
     )
     from experiment_tracker import ExperimentTracker
-    from loader import prepare_all_data
 
 
 def train_env_gnn_tracked(experiment_name: str, fold: int = None) -> Dict[str, Any]:
@@ -56,12 +54,13 @@ def train_env_gnn_tracked(experiment_name: str, fold: int = None) -> Dict[str, A
     config = get_model_config('env_gnn')
     device = get_device()
     
-    # Ensure data is prepared
-    prepare_all_data()
+    # Load consistent data - Environment GNN uses the FULL dataset for training
+    try:
+        from .loader import load_consistent_datasets
+    except ImportError:
+        from loader import load_consistent_datasets
     
-    # Load data and create consistent splits
-    with open(RESULTS_DIR / "cosmic_graphs.pkl", 'rb') as f:
-        data = pickle.load(f)
+    data, _, _ = load_consistent_datasets()
     
     splits = tracker.create_consistent_splits("cosmic_graph", "spatial")
     
@@ -216,24 +215,24 @@ def train_merger_gnn_tracked(experiment_name: str, fold: int = None,
     config = get_model_config('merger_gnn')
     device = get_device()
     
-    # Load merger trees
-    with open(RESULTS_DIR / "merger_trees.pkl", "rb") as f:
-        trees = pickle.load(f)
+    # Load consistent merger trees
+    try:
+        from .loader import load_consistent_datasets, apply_model_specific_filtering
+    except ImportError:
+        from loader import load_consistent_datasets, apply_model_specific_filtering
     
-    # Create or load consistent splits on original trees
+    # Load base consistent datasets
+    cosmic_graph, merger_trees, subhalos_base = load_consistent_datasets()
+    
+    # Apply model-specific filtering for merger trees
+    _, trees, _ = apply_model_specific_filtering(
+        cosmic_graph, merger_trees, subhalos_base,
+        minimum_stellar_mass=config.get('minimum_root_stellar_mass'),
+        only_centrals=config.get('only_centrals', False)
+    )
+    
+    # Create or load consistent splits on filtered trees
     splits = tracker.create_consistent_splits("merger_trees", "random")
-    
-    # Filter trees based on config and track valid indices
-    if config['only_centrals']:
-        valid_mask = [tree.is_central and tree.y[0, 0] > config['minimum_root_stellar_mass'] for tree in trees]
-    else:
-        valid_mask = [tree.y[0, 0] > config['minimum_root_stellar_mass'] for tree in trees]
-    
-    trees = [tree for i, tree in enumerate(trees) if valid_mask[i]]
-    valid_original_indices = [i for i, mask in enumerate(valid_mask) if mask]
-    
-    # Create mapping from original indices to filtered indices
-    index_mapping = {orig_idx: new_idx for new_idx, orig_idx in enumerate(valid_original_indices)}
     
     # Handle residual mode
     if residual_mode:
@@ -258,14 +257,11 @@ def train_merger_gnn_tracked(experiment_name: str, fold: int = None,
     for k in folds_to_train:
         print(f"\n=== Training Merger Tree GNN - Fold {k+1}/{K_FOLDS} ===")
         
-        # Get train/validation indices for trees and map to filtered indices
-        original_train_indices = splits[k]['train']
-        original_valid_indices = splits[k]['valid']
+        # Get train/validation indices for filtered trees
+        train_indices = splits[k]['train']
+        valid_indices = splits[k]['valid']
         
-        # Map to filtered tree indices, excluding invalid trees
-        train_indices = [index_mapping[i] for i in original_train_indices if i in index_mapping]
-        valid_indices = [index_mapping[i] for i in original_valid_indices if i in index_mapping]
-        
+        # Use indices directly since filtering was applied during data loading
         train_trees = [trees[i] for i in train_indices]
         valid_trees = [trees[i] for i in valid_indices]
         
@@ -371,9 +367,13 @@ def train_mlp_tracked(experiment_name: str, fold: int = None) -> Dict[str, Any]:
     config = get_model_config('mlp')
     device = get_device()
     
-    # Load data (reuse cosmic graph data but only node features)
-    with open(RESULTS_DIR / "cosmic_graphs.pkl", 'rb') as f:
-        data = pickle.load(f)
+    # Load consistent data - MLP uses the FULL dataset for training
+    try:
+        from .loader import load_consistent_datasets
+    except ImportError:
+        from loader import load_consistent_datasets
+    
+    data, _, _ = load_consistent_datasets()
     
     X = data.x
     y = data.y

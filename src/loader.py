@@ -399,52 +399,359 @@ def _trim_graph(edge_index, keep_mask):
                     
     return torch.tensor(reduced_edges).t() if reduced_edges else torch.empty((2, 0), dtype=torch.long)
 
-def prepare_all_data():
-    """Prepare all data sets: merger trees, crossmatched subhalo catalog, and env graph"""
+def apply_consistent_cuts(subhalos: pd.DataFrame, 
+                          minimum_stellar_mass: float = None,
+                          only_centrals: bool = False) -> pd.DataFrame:
+    """Apply consistent quality cuts to ensure reliable cross-model comparisons.
     
-    # create merger tree data set for crossmatching consistently...
+    Args:
+        subhalos: Full crossmatched subhalo catalog
+        minimum_stellar_mass: Minimum log stellar mass (default: no cut)
+        only_centrals: If True, keep only central galaxies (default: False)
+        
+    Returns:
+        Filtered subhalo catalog with consistent cuts applied
+    """
+    print(f"Starting with {len(subhalos)} crossmatched subhalos")
+    
+    # Remove subhalos with infinite/invalid values
+    subhalos_clean = subhalos[~np.isinf(subhalos.subhalo_logMRmax.values)].copy()
+    print(f"After removing inf logMRmax: {len(subhalos_clean)}")
+    
+    # Remove subhalos with invalid stellar mass
+    subhalos_clean = subhalos_clean[np.isfinite(subhalos_clean.subhalo_logstellarmass)].copy()
+    print(f"After removing invalid stellar mass: {len(subhalos_clean)}")
+    
+    # Apply stellar mass cut if specified
+    if minimum_stellar_mass is not None:
+        subhalos_clean = subhalos_clean[subhalos_clean.subhalo_logstellarmass > minimum_stellar_mass].copy()
+        print(f"After stellar mass cut (>{minimum_stellar_mass}): {len(subhalos_clean)}")
+    
+    # Apply centrals-only filter if specified
+    if only_centrals:
+        subhalos_clean = subhalos_clean[subhalos_clean.is_central == 1].copy()
+        print(f"After centrals-only cut: {len(subhalos_clean)}")
+    
+    return subhalos_clean
+
+def make_merger_tree_graphs_consistent(trees: pd.DataFrame, subhalos_filtered: pd.DataFrame) -> list[Data]:
+    """Create merger tree graphs using only the pre-filtered subhalo set.
+    
+    This ensures merger trees contain exactly the same subhalos as cosmic graphs.
+    """
+    # Set index for fast lookup
+    if subhalos_filtered.index.name != "subhalo_id_DMO":
+        subhalos_filtered = subhalos_filtered.set_index("subhalo_id_DMO")
+    
+    # Only create trees for subhalos in our filtered set
+    valid_subhalo_ids = set(subhalos_filtered.index.values)
+    
+    graphs = []
+    N_not_in_filtered_set = 0
+    N_created = 0
+    
+    for root_descendent_id, tree in trees.groupby("root_descendent_id"):
+        root_subhalo_id = tree.set_index("subhalo_tree_id").loc[root_descendent_id, "subhalo_id_in_this_snapshot"].astype(int)
+        
+        # Only include if this subhalo is in our filtered set
+        if root_subhalo_id not in valid_subhalo_ids:
+            N_not_in_filtered_set += 1
+            continue
+            
+        root_subhalo = subhalos_filtered.loc[root_subhalo_id]
+        
+        # Handle case where root_subhalo might be a Series or DataFrame
+        if hasattr(root_subhalo, 'iloc'):
+            # If multiple rows returned, take the first one
+            root_subhalo = root_subhalo.iloc[0] if len(root_subhalo.shape) > 1 else root_subhalo
+        
+        x = torch.tensor(
+            tree[[
+                "subhalo_loghalomass_DMO", "subhalo_logvmax_DMO", 'subhalo_logR50', 'subhalo_logMRmax', 
+                'subhalo_logVdisp', 'subhalo_logVmaxRad', 'subhalo_logspin', "snapshot"
+            ]].values, 
+            dtype=torch.float
+        )
+        
+        is_central = int(root_subhalo["is_central"])
+        
+        edges = [(s, d) for s, d in zip(tree.subhalo_tree_id.values, tree.descendent_id.values) if d != -1]
+        
+        # edges represented as incrementing indices (reset for each tree)
+        id2idx = {id: idx for id, idx in zip(tree.subhalo_tree_id.values, np.arange(len(tree)))}
+        edge_index = torch.tensor(([[id2idx[e1], id2idx[e2]] for (e1, e2) in edges]), dtype=torch.long).t().contiguous()
+        
+        final_logstellarmass = float(root_subhalo["subhalo_logstellarmass"])
+        final_loggasmass = float(root_subhalo["subhalo_loggasmass"])
+        final_targets = torch.tensor([[final_logstellarmass, final_loggasmass]], dtype=torch.float)
+        
+        graph = Data(
+            x=x, 
+            edge_index=edge_index, 
+            y=final_targets, 
+            is_central=is_central, 
+            root_subhalo_id=root_subhalo_id
+        )
+        
+        # get difference of snapshot numbers and add as edge feature
+        graph.edge_attr = graph.x[graph.edge_index[0],-1] - graph.x[graph.edge_index[1],-1]
+        graphs.append(graph)
+        N_created += 1
+    
+    print(f"Created {N_created} merger trees from filtered subhalos")
+    print(f"Skipped {N_not_in_filtered_set} trees not in filtered set")
+    
+    return graphs
+
+def make_cosmic_graph_consistent(subhalos_filtered: pd.DataFrame) -> Data:
+    """Create cosmic graph using the same filtered subhalo set as merger trees.
+    
+    This ensures consistent subhalo_id mappings across all models.
+    """
+    return make_cosmic_graph(subhalos_filtered, D_link=D_link, periodic=True)
+
+def validate_dataset_consistency(cosmic_graph: Data, merger_trees: list[Data], subhalos_filtered: pd.DataFrame):
+    """Validate that all datasets contain exactly the same set of subhalos.
+    
+    Raises AssertionError if inconsistencies are found.
+    """
+    # Get subhalo_id sets from each dataset
+    cosmic_ids = set(cosmic_graph.subhalo_id.tolist())
+    merger_ids = set([t.root_subhalo_id for t in merger_trees])
+    filtered_ids = set(subhalos_filtered['subhalo_id_DMO'].values if 'subhalo_id_DMO' in subhalos_filtered.columns 
+                      else subhalos_filtered.index.values)
+    
+    print(f"Cosmic graph subhalos: {len(cosmic_ids)}")
+    print(f"Merger tree subhalos: {len(merger_ids)}")
+    print(f"Filtered catalog subhalos: {len(filtered_ids)}")
+    
+    # Check for perfect consistency
+    if cosmic_ids != merger_ids:
+        only_cosmic = cosmic_ids - merger_ids
+        only_merger = merger_ids - cosmic_ids
+        raise AssertionError(
+            f"Subhalo ID mismatch between cosmic graph and merger trees!\n"
+            f"Only in cosmic: {len(only_cosmic)} subhalos\n"
+            f"Only in merger: {len(only_merger)} subhalos\n"
+            f"Sample cosmic-only IDs: {list(only_cosmic)[:10]}\n"
+            f"Sample merger-only IDs: {list(only_merger)[:10]}"
+        )
+    
+    # Validate that cosmic graph subhalos are subset of filtered catalog
+    if not cosmic_ids.issubset(filtered_ids):
+        missing = cosmic_ids - filtered_ids
+        raise AssertionError(
+            f"Cosmic graph contains {len(missing)} subhalos not in filtered catalog!\n"
+            f"Sample missing IDs: {list(missing)[:10]}"
+        )
+    
+    print("✓ All datasets contain consistent subhalo_id mappings")
+
+def load_consistent_datasets():
+    """Load all datasets with validation that they're consistent.
+    
+    Returns:
+        Tuple of (cosmic_graph, merger_trees, subhalos_base)
+        
+    Note: 
+        Returns the base consistent datasets without additional filtering.
+        Apply model-specific filtering (stellar mass cuts, centrals-only, etc.) 
+        at training/evaluation time, not at dataset loading time.
+        
+    Raises:
+        AssertionError if datasets are inconsistent
+        FileNotFoundError if datasets don't exist
+    """
+    import pickle
+    
+    # Check that all files exist
+    cosmic_fname = f"{results_dir}/cosmic_graphs.pkl"
+    trees_fname = f"{results_dir}/merger_trees.pkl"
+    subhalos_fname = f"{results_dir}/subhalos_in_trees.parquet"
+    
+    if not all(os.path.exists(f) for f in [cosmic_fname, trees_fname, subhalos_fname]):
+        raise FileNotFoundError(
+            "Consistent datasets not found. Run prepare_all_data() first to generate them."
+        )
+    
+    # Load all datasets
+    with open(cosmic_fname, 'rb') as f:
+        cosmic_graph = pickle.load(f)
+    
+    with open(trees_fname, 'rb') as f:
+        merger_trees = pickle.load(f)
+    
+    subhalos_base = pd.read_parquet(subhalos_fname)
+    subhalos_base = apply_consistent_cuts(subhalos_base)  # Only basic quality cuts
+    
+    # Validate consistency of base datasets
+    validate_dataset_consistency(cosmic_graph, merger_trees, subhalos_base)
+    
+    return cosmic_graph, merger_trees, subhalos_base
+
+def apply_model_specific_filtering(cosmic_graph, merger_trees, subhalos_base, 
+                                  minimum_stellar_mass: float = None, only_centrals: bool = False):
+    """Apply model-specific filtering to consistent datasets.
+    
+    Args:
+        cosmic_graph: Cosmic graph data
+        merger_trees: List of merger tree graphs
+        subhalos_base: Base subhalo catalog
+        minimum_stellar_mass: Minimum log stellar mass cut
+        only_centrals: Keep only central galaxies
+        
+    Returns:
+        Filtered versions of (cosmic_graph, merger_trees, subhalos_filtered) with consistent subhalo_ids
+    """
+    if minimum_stellar_mass is None and not only_centrals:
+        # No additional filtering needed
+        return cosmic_graph, merger_trees, subhalos_base
+    
+    print(f"Applying model-specific filtering: M*>{minimum_stellar_mass}, centrals_only={only_centrals}")
+    
+    # Apply filtering to subhalo catalog
+    subhalos_filtered = apply_consistent_cuts(subhalos_base, minimum_stellar_mass, only_centrals)
+    valid_subhalo_ids = set(subhalos_filtered['subhalo_id_DMO'].values)
+    
+    print(f"Filtering: {len(subhalos_base)} -> {len(subhalos_filtered)} subhalos")
+    
+    # Filter cosmic graph
+    cosmic_mask = torch.tensor([sid.item() in valid_subhalo_ids for sid in cosmic_graph.subhalo_id])
+    cosmic_filtered = Data(
+        x=cosmic_graph.x[cosmic_mask],
+        edge_index=None,  # Will need to rebuild edges for the filtered graph
+        y=cosmic_graph.y[cosmic_mask],
+        pos=cosmic_graph.pos[cosmic_mask],
+        vel=cosmic_graph.vel[cosmic_mask],
+        is_central=cosmic_graph.is_central[cosmic_mask],
+        x_hydro=cosmic_graph.x_hydro[cosmic_mask],
+        pos_hydro=cosmic_graph.pos_hydro[cosmic_mask],
+        vel_hydro=cosmic_graph.vel_hydro[cosmic_mask],
+        halfmassradius=cosmic_graph.halfmassradius[cosmic_mask],
+        subhalo_id=cosmic_graph.subhalo_id[cosmic_mask],
+        idx=cosmic_graph.idx[cosmic_mask],
+        overdensity=cosmic_graph.overdensity[cosmic_mask],
+    )
+    
+    # Rebuild edges for filtered cosmic graph
+    cosmic_filtered = _rebuild_cosmic_graph_edges(cosmic_filtered, subhalos_filtered)
+    
+    # Filter merger trees
+    trees_filtered = [tree for tree in merger_trees if tree.root_subhalo_id in valid_subhalo_ids]
+    
+    print(f"Filtered datasets: cosmic={len(cosmic_filtered.subhalo_id)}, trees={len(trees_filtered)}")
+    
+    return cosmic_filtered, trees_filtered, subhalos_filtered
+
+def _rebuild_cosmic_graph_edges(cosmic_data, subhalos_filtered):
+    """Rebuild edges and edge attributes for filtered cosmic graph using full graph construction."""
+    # Create a temporary dataframe for full graph rebuilding
+    # We need the full set of columns that make_cosmic_graph expects
+    temp_df = pd.DataFrame({
+        'subhalo_id_DMO': cosmic_data.subhalo_id.numpy(),
+        'subhalo_x_DMO': cosmic_data.pos[:, 0].numpy(),
+        'subhalo_y_DMO': cosmic_data.pos[:, 1].numpy(), 
+        'subhalo_z_DMO': cosmic_data.pos[:, 2].numpy(),
+        'subhalo_vx_DMO': cosmic_data.vel[:, 0].numpy(),
+        'subhalo_vy_DMO': cosmic_data.vel[:, 1].numpy(),
+        'subhalo_vz_DMO': cosmic_data.vel[:, 2].numpy(),
+        'subhalo_loghalomass_DMO': cosmic_data.x[:, 0].numpy(),
+        'subhalo_logvmax_DMO': cosmic_data.x[:, 1].numpy(),
+        'subhalo_logR50': cosmic_data.x[:, 2].numpy(),
+        'subhalo_logMRmax': cosmic_data.x[:, 3].numpy(),
+        'subhalo_logVdisp': cosmic_data.x[:, 4].numpy(),
+        'subhalo_logVmaxRad': cosmic_data.x[:, 5].numpy(),
+        'subhalo_logspin': cosmic_data.x[:, 6].numpy(),
+        'is_central': cosmic_data.is_central.numpy().flatten(),
+        'subhalo_loghalomass': cosmic_data.x_hydro[:, 0].numpy(),
+        'subhalo_logvmax': cosmic_data.x_hydro[:, 1].numpy(),
+        'subhalo_x': cosmic_data.pos_hydro[:, 0].numpy(),
+        'subhalo_y': cosmic_data.pos_hydro[:, 1].numpy(),
+        'subhalo_z': cosmic_data.pos_hydro[:, 2].numpy(),
+        'subhalo_vx': cosmic_data.vel_hydro[:, 0].numpy(),
+        'subhalo_vy': cosmic_data.vel_hydro[:, 1].numpy(),
+        'subhalo_vz': cosmic_data.vel_hydro[:, 2].numpy(),
+        'subhalo_logstellarmass': cosmic_data.y[:, 0].numpy(),
+        'subhalo_loggasmass': cosmic_data.y[:, 1].numpy(),
+        'subhalo_logstellarhalfmassradius': cosmic_data.halfmassradius.numpy().flatten(),
+    })
+    
+    # Rebuild the complete cosmic graph with edges and edge attributes
+    rebuilt_graph = make_cosmic_graph(temp_df, D_link=D_link, periodic=True)
+    
+    # Update the original cosmic_data with properly built edges and edge_attr
+    cosmic_data.edge_index = rebuilt_graph.edge_index
+    cosmic_data.edge_attr = rebuilt_graph.edge_attr
+    cosmic_data.overdensity = rebuilt_graph.overdensity  # Also update overdensity for filtered graph
+    
+    return cosmic_data
+
+def prepare_all_data(minimum_stellar_mass: float = None, only_centrals: bool = False):
+    """Prepare all data sets with consistent filtering for reliable cross-model comparisons.
+    
+    This function ensures that cosmic graphs and merger trees contain exactly the same
+    set of subhalos by applying filtering in the correct order and validating consistency.
+    
+    Args:
+        minimum_stellar_mass: Minimum log stellar mass filter (default: None for no cut)
+        only_centrals: If True, keep only central galaxies (default: False for all galaxies)
+        
+    Usage:
+        # For full comparison (all galaxies):
+        prepare_all_data()
+        
+        # For merger-tree style analysis (centrals with M* > 8.5):
+        prepare_all_data(minimum_stellar_mass=8.5, only_centrals=True)
+    """
+    
+    # Step 1: Load and apply consistent filtering to crossmatched subhalos
+    crossmatched_fname = f"{results_dir}/subhalos_in_trees.parquet"
+    if not os.path.exists(crossmatched_fname):
+        print("Creating crossmatched subhalo catalog...")
+        subhalos = prepare_subhalos()
+        subhalos.to_parquet(crossmatched_fname)
+        print(f"Saved crossmatched catalog: {crossmatched_fname}")
+    
+    # Load the crossmatched catalog (single source of truth)
+    print("Loading crossmatched subhalos...")
+    subhalos = pd.read_parquet(crossmatched_fname)
+    
+    # Step 2: Apply consistent quality cuts to create master filtered set
+    print("Applying consistent quality cuts...")
+    subhalos_filtered = apply_consistent_cuts(subhalos, minimum_stellar_mass, only_centrals)
+    print(f"Filtered subhalos: {len(subhalos)} -> {len(subhalos_filtered)}")
+    
+    # Step 3: Create merger tree dataset from filtered subhalos
     trees_fname = f"{results_dir}/merger_trees.pkl"
     if not os.path.exists(trees_fname):
-        print("loading subhalos...")
-        subhalos = prepare_subhalos()
-
-        print("loading trees...")
+        print("Loading raw merger trees...")
         trees = load_trees()
-
-        # some broken values in here...
-        subhalos = subhalos[~np.isinf(subhalos.subhalo_logMRmax.values)].copy()
-
-        print("making merger tree graphs...")
-        merger_trees = make_merger_tree_graphs(trees, subhalos)
-
+        
+        print("Making merger tree graphs from filtered subhalos...")
+        merger_trees = make_merger_tree_graphs_consistent(trees, subhalos_filtered)
+        
         with open(trees_fname, 'wb') as f:
             pickle.dump(merger_trees, f)
-        print(f"saved ---> {trees_fname}!")
+        print(f"Saved merger trees: {trees_fname}")
     else:
         with open(trees_fname, "rb") as f:
             merger_trees = pickle.load(f)
     
-    # create crossmatched dataset
-    crossmatched_fname = f"{results_dir}/subhalos_in_trees.parquet"
-    if not os.path.exists(crossmatched_fname):
-        print("crossmatching and saving subhalos...")
-        subhalos = prepare_subhalos()
-        subhalos = subhalos[~np.isinf(subhalos.subhalo_logMRmax.values)].copy()
-
-        # make sure subhalos.subhalo_id_DMO <--> tree.root_subhalo_id at z=0
-        subhalo_ids = [t.root_subhalo_id for t in merger_trees]
-        subhalos = subhalos.set_index("subhalo_id_DMO").loc[subhalo_ids].reset_index()
-        
-        subhalos.to_parquet(crossmatched_fname)
-
-    # finally, create the environmental graphs (only those overlapping with merger trees)
+    # Step 4: Create cosmic graph from same filtered subhalos
     graphs_fname = f"{results_dir}/cosmic_graphs.pkl"
     if not os.path.exists(graphs_fname):
-        subhalos = pd.read_parquet(crossmatched_fname)
-
-        print("making cosmic graph...")
-        cosmic_graph = make_cosmic_graph(subhalos, D_link=D_link, periodic=True)
+        print("Making cosmic graph from filtered subhalos...")
+        cosmic_graph = make_cosmic_graph_consistent(subhalos_filtered)
         
         with open(graphs_fname, 'wb') as f:
             pickle.dump(cosmic_graph, f)
-        print(f"saved ---> {graphs_fname}!")
+        print(f"Saved cosmic graph: {graphs_fname}")
+    else:
+        with open(graphs_fname, "rb") as f:
+            cosmic_graph = pickle.load(f)
+    
+    # Step 5: Validate consistency
+    print("Validating data consistency...")
+    validate_dataset_consistency(cosmic_graph, merger_trees, subhalos_filtered)
+    
+    print("✓ All datasets prepared with consistent subhalo_id mappings")

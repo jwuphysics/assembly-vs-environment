@@ -13,6 +13,7 @@ from pathlib import Path
 # Add src to path for imports
 sys.path.append(str(Path(__file__).parent / "src"))
 
+from src.loader import prepare_all_data
 from src.train import run_comparison_experiment, run_residual_experiment
 from experiment_tracker import ExperimentTracker
 
@@ -90,6 +91,9 @@ def main():
         print(f"\nResidual experiment complete! Results saved in: {residual_tracker.exp_dir}")
         
     else:
+        # Ensure we have data
+        prepare_all_data()
+
         # Run full comparison experiment
         print(f"Running comparison experiment: {args.experiment}")
         print(f"Models: {args.models}")

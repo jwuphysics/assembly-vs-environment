@@ -107,7 +107,7 @@ def load_subhalos(hydro: bool=True, cuts: dict=cuts, snapshot: int=snapshot) -> 
     df["subhalo_loghalomass"] = np.log10(df["subhalo_halomass"] / h)+10
     df["subhalo_logvmax"] = np.log10(df["subhalo_vmax"])
     df["subhalo_logstellarhalfmassradius"] = np.log10(df["subhalo_stellarhalfmassradius"])
-    df["subhalo_loggasmass"] = np.log10(df["subhalo_gasmass"])
+    df["subhalo_loggasmass"] = np.log10(df["subhalo_gasmass"] / h) + 10
     if hydro:
         df["subhalo_logsfr"] = np.log10(df["subhalo_sfr"])
         df["subhalo_gasmetallicity"] = np.log10(df["subhalo_gasmetallicity"]) + 12
@@ -196,14 +196,15 @@ def load_trees(cuts=cuts) -> pd.DataFrame:
                 "DescendantID": "descendent_id",
                 "RootDescendantID": "root_descendent_id",
                 "SnapNum": "snapshot",
-                "SubhaloID": "subhalo_tree_id",
-                "GroupFirstSub": "is_central",
+                "SubhaloID": "subhalo_tree_id"
             },
             axis=1,
             inplace=True
         )
+
+        df["is_central"] = df["GroupFirstSub"] == df["subhalo_id_in_this_snapshot"]
     
-        df["subhalo_loghalomass_DMO"] = np.log10(df["SubhaloMass"]) + 10
+        df["subhalo_loghalomass_DMO"] = np.log10(df["SubhaloMass"] / h) + 10
         df["subhalo_logvmax_DMO"] = np.log10(df["SubhaloVmax"])
         df.drop(["SubhaloMass", "SubhaloVmax"], axis=1, inplace=True)
 

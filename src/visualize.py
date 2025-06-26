@@ -23,13 +23,14 @@ def plot_merger_tree(
 ) -> None:
     """Plot 
     """
-    plt.figure(figsize=(6, 6), dpi=300)
+    plt.figure(figsize=(6, 8), dpi=300)
 
-    edges = [(s, d) for s, d in zip(tree.subhalo_tree_id.values, tree.descendent_id.values) if d != -1]
-
-    G = nx.DiGraph(edges)
+    G = to_networkx(tree)
     pos = graphviz_layout(G, prog="dot")
-    m = tree.subhalo_loghalomass.values
+    m = tree.x[:,0].numpy()
+
+    if title is not None:
+        plt.title(title)
 
     nx.draw(
         G, 
@@ -47,7 +48,7 @@ def plot_merger_tree(
     cbar = plt.colorbar(
         sm,
         ax=plt.gca(),
-        label=r"$\log(M_{\rm halo}/M_\odot)$", 
+        label=r"$\log(M_{\rm subhalo}/M_\odot)$", 
         aspect=60, 
         shrink=0.8
     )
@@ -58,4 +59,4 @@ def plot_merger_tree(
     plt.tight_layout()
 
     if save_figname is not None:
-        plt.savefig(f"{ROOT}/results/figures/{save_figname}.png")
+        plt.savefig(f"{ROOT}/results/figures/{save_figname}.pdf")

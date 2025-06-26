@@ -18,7 +18,7 @@ def make_cosmic_graph(subhalos: pd.DataFrame, D_link: int, periodic: bool=True) 
     """
     df = subhalos.copy()
 
-    subhalo_id = torch.tensor(df.index.values, dtype=torch.long)
+    subhalo_id = torch.tensor(df['subhalo_id_DMO'].values, dtype=torch.long)
 
     df.reset_index(drop=True)
 
@@ -29,7 +29,7 @@ def make_cosmic_graph(subhalos: pd.DataFrame, D_link: int, periodic: bool=True) 
     x_hydro = torch.tensor(df[["subhalo_loghalomass", 'subhalo_logvmax']].values, dtype=torch.float)
 
     # hydro total stellar mass
-    y = torch.tensor(df[['subhalo_logstellarmass']].values, dtype=torch.float) # , 'subhalo_loggasmass', 'subhalo_logsfr', 'subhalo_gasmetallicity', 'subhalo_starmetallicity'
+    y = torch.tensor(df[['subhalo_logstellarmass', 'subhalo_loggasmass']].values, dtype=torch.float) # , 'subhalo_loggasmass', 'subhalo_logsfr', 'subhalo_gasmetallicity', 'subhalo_starmetallicity'
 
     # phase space coordinates
     pos = torch.tensor(df[['subhalo_x_DMO', 'subhalo_y_DMO', 'subhalo_z_DMO']].values, dtype=torch.float)
@@ -157,7 +157,7 @@ def make_cosmic_graph(subhalos: pd.DataFrame, D_link: int, periodic: bool=True) 
 
     data = Data(
         x=x,
-        edge_index=edge_index,
+        edge_index=edge_index_mapped,
         edge_attr=edge_attr,
         y=y,
         pos=pos,
@@ -207,7 +207,7 @@ def make_merger_tree_graphs(trees: pd.DataFrame, subhalos: pd.DataFrame) -> list
             N_bad_stellar_mass += 1
             continue
 
-        x = torch.tensor(tree[["subhalo_loghalomass_DMO", "subhalo_logvmax_DMO", "is_central", "snapshot"]].values, dtype=torch.float)
+        x = torch.tensor(tree[["subhalo_loghalomass_DMO", "subhalo_logvmax_DMO", "is_central", "snapshot"]].values.astype(float), dtype=torch.float)
         
         edges = [(s, d) for s, d in zip(tree.subhalo_tree_id.values, tree.descendent_id.values) if d != -1]
         
@@ -218,10 +218,9 @@ def make_merger_tree_graphs(trees: pd.DataFrame, subhalos: pd.DataFrame) -> list
         id2idx = {id: idx for id, idx in zip(tree.subhalo_tree_id.values, np.arange(len(tree)))}
         edge_index = torch.tensor(([[id2idx[e1], id2idx[e2]] for (e1, e2) in edges]), dtype=torch.long).t().contiguous()
         
-        final_logstellarmass = torch.tensor([root_subhalo["subhalo_logstellarmass"]], dtype=torch.float)
+        y = torch.tensor(root_subhalo[["subhalo_logstellarmass", "subhalo_loggasmass"]].values.astype(float), dtype=torch.float)
 
-        # TODO - remove snapshot number as node feature, input differences as edge features
-        graph = Data(x=x, edge_index=edge_index, y=final_logstellarmass, root_subhalo_id=root_subhalo_id)
+        graph = Data(x=x, y=y, edge_index=edge_index, root_subhalo_id=root_subhalo_id)
         graphs.append(graph)
 
     print(

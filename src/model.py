@@ -5,6 +5,7 @@ from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
 from torch_geometric.nn import MessagePassing
 from torch_geometric.nn import global_mean_pool, global_max_pool, global_add_pool, SAGEConv
+from torch_geometric.utils import subgraph
 
 class EdgeInteractionLayer(MessagePassing):
     """Graph interaction layer that combines node & edge features on edges.
@@ -261,10 +262,10 @@ class SAGEEncoder(torch.nn.Module):
         self.res_connection_adapter = nn.Linear(n_in, n_hidden)
         
         self.mlp = nn.Sequential(
-            nn.Linear(n_hidden, 4 * self.n_hidden),
+            nn.Linear(n_hidden, 4 * n_hidden),
             nn.SiLU(),
-            nn.LayerNorm(4 * self.n_hidden),
-            nn.Linear(4 * self.n_hidden, n_hidden)
+            nn.LayerNorm(4 * n_hidden),
+            nn.Linear(4 * n_hidden, n_hidden)
         )
 
     def forward(self, x, edge_index):
@@ -293,40 +294,39 @@ class BonsaiStumpSAGENet(torch.nn.Module):
         self.bonsai_encoder = SAGEEncoder(n_in, n_hidden, n_layers, aggr)
         self.stump_encoder = SAGEEncoder(n_in, n_hidden, n_layers, aggr)
         
-        readout_in_features = 6 * n_hidden + 2 * n_in
+        readout_in_features = 4 * n_hidden + n_in
         
         self.readout = nn.Sequential(
             nn.Linear(readout_in_features, 4 * n_hidden, bias=True),
             nn.SiLU(),
             nn.LayerNorm(4 * n_hidden),
-            nn.Linear(4 * n_hidden, n_out, bias=True)
+            nn.Linear(4 * n_hidden, 2 * n_out, bias=True)
         )
 
     def forward(self, data):
         # bonsai encoder 
-        x_bonsai, edge_index_bonsai, batch_bonsai = data.x, data.edge_index, data.batch
+        x_bonsai, edge_index_bonsai, batch_bonsai = data['bonsai'].x, data['bonsai', 'to', 'bonsai'].edge_index, data['bonsai'].batch
         bonsai_node_feats = self.bonsai_encoder(x_bonsai, edge_index_bonsai)
         
         bonsai_pooled = torch.cat([
             global_mean_pool(bonsai_node_feats, batch_bonsai),
             global_max_pool(bonsai_node_feats, batch_bonsai),
-            global_add_pool(bonsai_node_feats, batch_bonsai),
+            # global_add_pool(bonsai_node_feats, batch_bonsai),
         ], dim=1)
 
         # stump encoder
-        x_stump, edge_index_stump = data.x_stump, data.edge_index_stump
-        batch_stump = data.x_stump_batch # PyG creates this automatically!
+        x_stump, edge_index_stump, batch_stump = data['stump'].x, data['stump', 'to', 'stump'].edge_index, data['stump'].batch
         stump_node_feats = self.stump_encoder(x_stump, edge_index_stump)
         
         stump_pooled = torch.cat([
             global_mean_pool(stump_node_feats, batch_stump),
             global_max_pool(stump_node_feats, batch_stump),
-            global_add_pool(stump_node_feats, batch_stump),
+            # global_add_pool(stump_node_feats, batch_stump),
         ], dim=1)
 
         # skip connection using pointer back to original indexing (root features should be same between two)
-        bonsai_root_indices = data.ptr[:-1]
-        bonsai_original_root_feats = data.x[bonsai_root_indices]
+        bonsai_root_indices = data['bonsai'].ptr[:-1]
+        bonsai_original_root_feats = x_bonsai[bonsai_root_indices]
         
         # concat features
         combined_features = torch.cat([

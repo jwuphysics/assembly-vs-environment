@@ -5,7 +5,7 @@ import scipy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.data import Data
+from torch_geometric.data import Data, HeteroData
 from torch_geometric.utils import to_undirected, remove_self_loops
 from torch_scatter import scatter_add
 from typing import List
@@ -317,65 +317,77 @@ def trim_merger_trees(graphs: List[Data]) -> List[Data]:
 
 def create_stumps(graphs: List[Data], min_snap: int = 90, max_snap: int = 99) -> List[Data]:
     """
-    Hack down merger trees to create "stumps" containing subgraph within snapshot range (inclusive of endpoints).
+    Hacks down merger trees to create "stumps" using the PyG subgraph utility.
     """
     stump_data = []
     for graph in tqdm.tqdm(graphs):
-        # keep nodes (assumes simulation snapshot is in final node feature = -1)
+        # keep nodes
         snapshot_numbers = graph.x[:, -1]
         node_mask = (snapshot_numbers >= min_snap) & (snapshot_numbers <= max_snap)
+        nodes_to_keep = node_mask.nonzero().squeeze(-1) # Get indices from mask
 
-        # handle edge case with nothing
-        if not node_mask.any():
-            stump_data.append(Data(x=torch.empty(0, graph.num_node_features), edge_index=torch.empty(2, 0, dtype=torch.long)))
+        if nodes_to_keep.numel() == 0:
+            # empty graph if missing
+            empty_stump = Data(
+                x=torch.empty(0, graph.num_node_features),
+                edge_index=torch.empty(2, 0, dtype=torch.long),
+                y=graph.y, 
+                root_subhalo_id=graph.root_subhalo_id,
+            )
+            stump_data.append(empty_stump)
             continue
-
-        # keeping edges & filtering with mask
-        row, col = graph.edge_index
-        edge_mask = node_mask[row] & node_mask[col]
-        subgraph_edge_index = graph.edge_index[:, edge_mask]
-
-        # re-map node indices in the filtered edge_index
-        nodes_to_keep_indices = torch.where(node_mask)[0]
-        remap_tensor = torch.full((graph.num_nodes,), -1, dtype=torch.long, device=graph.x.device)
-        remap_tensor[nodes_to_keep_indices] = torch.arange(
-            nodes_to_keep_indices.numel(), device=graph.x.device
+            
+        # make subgraph; reindex and relabel nodes
+        stump_edge_index, stump_edge_attr = subgraph(
+            subset=nodes_to_keep,
+            edge_index=graph.edge_index,
+            edge_attr=getattr(graph, 'edge_attr', None),
+            relabel_nodes=True,
+            num_nodes=graph.num_nodes,
         )
-        new_edge_index = remap_tensor[subgraph_edge_index]
 
-        # create stump
+        # save new Data
         tree_stump = Data(
-            x=graph.x[node_mask],
-            edge_index=new_edge_index,
+            x=graph.x[nodes_to_keep], # Use indices to select node features
+            edge_index=stump_edge_index,
             y=graph.y,
             root_subhalo_id=graph.root_subhalo_id,
         )
-
-        # Also filter edge attributes if they exist
-        if 'edge_attr' in graph and graph.edge_attr is not None:
-            tree_stump.edge_attr = graph.edge_attr[edge_mask]
+        
+        if stump_edge_attr is not None:
+            tree_stump.edge_attr = stump_edge_attr
 
         stump_data.append(tree_stump)
 
     return stump_data
 
-def create_bonsai_stump_pairs(bonsais: List[Data], stumps: List[Data]) -> List[Data]:
+def create_bonsai_stump_pairs(bonsais: List[Data], stumps: List[Data]) -> List[HeteroData]:
     """
-    Combines bonsai and stump graphs into single Data objects for dual processing.
+    Combines bonsai and stump graphs into single HeteroData objects using standard conventions.
     """
     assert len(bonsais) == len(stumps), "Bonsai and stump lists must have the same length."
     
     paired_graphs = []
     for bonsai, stump in zip(bonsais, stumps):
-        paired_data = bonsai.clone()
+        data = HeteroData()
         
-        paired_data.x_stump = stump.x
-        paired_data.edge_index_stump = stump.edge_index
+        # make nodes
+        data['bonsai'].x = bonsai.x.clone()
+        data['stump'].x = stump.x.clone()
         
-        # You can also add stump edge attributes if they exist
+        # define edges + attributes via weird PyG indexing...
+        data['bonsai', 'to', 'bonsai'].edge_index = bonsai.edge_index.clone()
+        if 'edge_attr' in bonsai and bonsai.edge_attr is not None:
+            data['bonsai', 'to', 'bonsai'].edge_attr = bonsai.edge_attr.clone()
+            
+        data['stump', 'to', 'stump'].edge_index = stump.edge_index.clone()
         if 'edge_attr' in stump and stump.edge_attr is not None:
-            paired_data.edge_attr_stump = stump.edge_attr
-        
-        paired_graphs.append(paired_data)
+            data['stump', 'to', 'stump'].edge_attr = stump.edge_attr.clone()
+            
+        # Graph-level target + attributes
+        data.y = stump.y.clone()
+        data.root_subhalo_id = stump.root_subhalo_id
+
+        paired_graphs.append(data)
         
     return paired_graphs

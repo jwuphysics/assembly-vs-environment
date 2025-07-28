@@ -167,13 +167,13 @@ class SAGEGraphConvNet(torch.nn.Module):
         return self.readout(out)
 
 class MultiSAGENet(torch.nn.Module):
-    """A multi-layer GNN built using SAGEConv layers.
+    """A multi-layer GNN built using SAGEConv layers -- for REGULAR merger trees.
     """
     def __init__(
         self, 
         n_in=4, 
         n_hidden=16, 
-        n_out=1, 
+        n_out=2,
         n_layers=4, 
         aggr=["max", "mean"]
     ):
@@ -185,36 +185,154 @@ class MultiSAGENet(torch.nn.Module):
         self.n_layers = n_layers
         self.aggr = aggr
 
-        sage_convs = [SAGEConv(self.n_in, self.n_hidden, aggr=self.aggr)]                
-        sage_convs += [SAGEConv(self.n_hidden, self.n_hidden, aggr=self.aggr) for _ in range(self.n_layers - 1)]
-        self.convs = nn.ModuleList(sage_convs)
-        
+        self.init_conv = SAGEConv(self.n_in, self.n_hidden, aggr=self.aggr)
+        self.convs = nn.ModuleList()
+        for _ in range(self.n_layers - 1):
+            self.convs.append(SAGEConv(self.n_hidden, self.n_hidden, aggr=self.aggr))
+
+        self.res_connection_adapter = nn.Linear(self.n_in, self.n_hidden)
+
+        # layernorms
+        self.lns = nn.ModuleList() 
+        for _ in range(self.n_layers):
+            self.lns.append(nn.LayerNorm(self.n_hidden))
+
+        # Node-level MLP
         self.mlp = nn.Sequential(
             nn.Linear(self.n_hidden, 4 * self.n_hidden, bias=True),
             nn.SiLU(),
             nn.LayerNorm(4 * self.n_hidden),
             nn.Linear(4 * self.n_hidden, self.n_hidden, bias=True)
         )
+        
         self.readout = nn.Sequential(
-            nn.Linear(3 * self.n_hidden, 4 * self.n_hidden, bias=True),
+            nn.Linear(3 * self.n_hidden + self.n_in, 4 * self.n_hidden, bias=True),
             nn.SiLU(),
             nn.LayerNorm(4 * self.n_hidden),
-            nn.Linear(4 * self.n_hidden, 2 * self.n_out, bias=True)
+            nn.Linear(4 * self.n_hidden, 2 * self.n_out, bias=True) 
         )
 
     def forward(self, data):
-        x, edge_index = data.x, data.edge_index
+        x, edge_index, batch = data.x, data.edge_index, data.batch
 
-        for conv in self.convs:
-            x = conv(x, edge_index)
+        x_res = self.res_connection_adapter(x)
+        x = self.init_conv(x, edge_index)
+        x = self.lns[0](x)
+        x = x + x_res
+        x = F.silu(x)
+
+        for i in range(self.n_layers - 1):
+            x_res = x  
+            x = self.convs[i](x, edge_index)
+            x = self.lns[i+1](x)
+            x = x + x_res 
             x = F.silu(x)
 
         x = self.mlp(x)
- 
+
+        # batching to get root node for original features
+        root_node_indices = data.ptr[:-1]
+        original_root_features = data.x[root_node_indices]
+
+        # pooling + root node features
         out = torch.cat([
-            global_mean_pool(x, data.batch),
-            global_max_pool(x, data.batch), 
-            global_add_pool(x, data.batch)
-        ], axis=1)
-              
+            global_mean_pool(x, batch),
+            global_max_pool(x, batch),
+            global_add_pool(x, batch),
+            original_root_features
+        ], dim=1)
+                      
         return self.readout(out)
+
+class SAGEEncoder(torch.nn.Module):
+    """Simple SAGE GNN encoder."""
+    def __init__(self, n_in=4, n_hidden=16, n_layers=4, aggr=["max", "mean"]):
+        super().__init__()
+        self.convs = nn.ModuleList()
+        self.lns = nn.ModuleList()
+        
+        self.init_conv = SAGEConv(n_in, n_hidden, aggr=aggr)
+        self.lns.append(nn.LayerNorm(n_hidden))
+        
+        for _ in range(n_layers - 1):
+            self.convs.append(SAGEConv(n_hidden, n_hidden, aggr=aggr))
+            self.lns.append(nn.LayerNorm(n_hidden))
+            
+        self.res_connection_adapter = nn.Linear(n_in, n_hidden)
+        
+        self.mlp = nn.Sequential(
+            nn.Linear(n_hidden, 4 * self.n_hidden),
+            nn.SiLU(),
+            nn.LayerNorm(4 * self.n_hidden),
+            nn.Linear(4 * self.n_hidden, n_hidden)
+        )
+
+    def forward(self, x, edge_index):
+        x_res = self.res_connection_adapter(x)
+        x = self.init_conv(x, edge_index)
+        x = self.lns[0](x)
+        x = x + x_res
+        x = F.silu(x)
+
+        for i in range(len(self.convs)):
+            x_res = x  
+            x = self.convs[i](x, edge_index)
+            x = self.lns[i+1](x)
+            x = x + x_res 
+            x = F.silu(x)
+
+        return self.mlp(x)
+
+class BonsaiStumpSAGENet(torch.nn.Module):
+    """
+    A two-tower SAGE GNN to jointly process bonsai (trimmed) and stump (snapshots 90-99) graphs.
+    """
+    def __init__(self, n_in=4, n_hidden=16, n_out=2, n_layers=4, aggr=["max", "mean"]):
+        super().__init__()
+        
+        self.bonsai_encoder = SAGEEncoder(n_in, n_hidden, n_layers, aggr)
+        self.stump_encoder = SAGEEncoder(n_in, n_hidden, n_layers, aggr)
+        
+        readout_in_features = 6 * n_hidden + 2 * n_in
+        
+        self.readout = nn.Sequential(
+            nn.Linear(readout_in_features, 4 * n_hidden, bias=True),
+            nn.SiLU(),
+            nn.LayerNorm(4 * n_hidden),
+            nn.Linear(4 * n_hidden, n_out, bias=True)
+        )
+
+    def forward(self, data):
+        # bonsai encoder 
+        x_bonsai, edge_index_bonsai, batch_bonsai = data.x, data.edge_index, data.batch
+        bonsai_node_feats = self.bonsai_encoder(x_bonsai, edge_index_bonsai)
+        
+        bonsai_pooled = torch.cat([
+            global_mean_pool(bonsai_node_feats, batch_bonsai),
+            global_max_pool(bonsai_node_feats, batch_bonsai),
+            global_add_pool(bonsai_node_feats, batch_bonsai),
+        ], dim=1)
+
+        # stump encoder
+        x_stump, edge_index_stump = data.x_stump, data.edge_index_stump
+        batch_stump = data.x_stump_batch # PyG creates this automatically!
+        stump_node_feats = self.stump_encoder(x_stump, edge_index_stump)
+        
+        stump_pooled = torch.cat([
+            global_mean_pool(stump_node_feats, batch_stump),
+            global_max_pool(stump_node_feats, batch_stump),
+            global_add_pool(stump_node_feats, batch_stump),
+        ], dim=1)
+
+        # skip connection using pointer back to original indexing (root features should be same between two)
+        bonsai_root_indices = data.ptr[:-1]
+        bonsai_original_root_feats = data.x[bonsai_root_indices]
+        
+        # concat features
+        combined_features = torch.cat([
+            bonsai_pooled, 
+            stump_pooled,
+            bonsai_original_root_feats
+        ], dim=1)
+                      
+        return self.readout(combined_features)

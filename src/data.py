@@ -37,13 +37,13 @@ def load_subhalos(hydro: bool=True, cuts: dict=cuts, snapshot: int=snapshot) -> 
     
     use_cols = ['subhalo_x', 'subhalo_y', 'subhalo_z', 'subhalo_vx', 'subhalo_vy', 'subhalo_vz', 'subhalo_loghalomass', 'subhalo_logvmax'] 
     y_cols = ['subhalo_logstellarmass', 'subhalo_loggasmass', 'subhalo_logsfr', 'subhalo_gasmetallicity', 'subhalo_starmetallicity']
-
  
     base_path = (tng_base_path.replace("-1", "-1-Dark") if not hydro else tng_base_path) + "/output"
 
     subhalo_fields = [
-        "SubhaloPos", "SubhaloMassType", "SubhaloLenType", "SubhaloHalfmassRadType", 
-        "SubhaloVel", "SubhaloVmax", "SubhaloGrNr"
+        "SubhaloPos", "SubhaloCM", "SubhaloMassType", "SubhaloLenType", 
+        "SubhaloMassInHalfRadType", "SubhaloMassInMaxRadType", "SubhaloMassInRadType",  "SubhaloHalfmassRadType", 
+        "SubhaloVel", "SubhaloVmax", "SubhaloGrNr", "SubhaloSpin", "SubhaloVelDisp", "SubhaloVmaxRad",
     ]
 
     if hydro:
@@ -67,6 +67,16 @@ def load_subhalos(hydro: bool=True, cuts: dict=cuts, snapshot: int=snapshot) -> 
     subhalo_flag = subhalos["SubhaloFlag"][:] if hydro else np.ones_like(subhalo_halomass) # note dummy values of 1 if DMO
     halo_id = subhalos["SubhaloGrNr"][:].astype(int)
 
+    # extra subhalo features
+    subhalo_MRhalf = subhalos["SubhaloMassInHalfRadType"][:,1]
+    subhalo_MRvmax = subhalos["SubhaloMassInMaxRadType"][:,1]
+    subhalo_MR2half = subhalos["SubhaloMassInRadType"][:,1]
+    subhalo_RMhalf = subhalos["SubhaloHalfmassRadType"][:,1]
+    subhalo_spin = (subhalos["SubhaloSpin"][:,0]**2 + subhalos["SubhaloSpin"][:,1]**2 + subhalos["SubhaloSpin"][:,2]**2)**0.5
+    subhalo_Vdisp = subhalos["SubhaloVelDisp"][:]
+    subhalo_VmaxRad = subhalos["SubhaloVmaxRad"][:]
+    subhalo_offset = ((subhalos["SubhaloPos"][:,0] - subhalos["SubhaloCM"][:,0])**2 + (subhalos["SubhaloPos"][:,1] - subhalos["SubhaloCM"][:,1])**2 + (subhalos["SubhaloPos"][:,2] - subhalos["SubhaloCM"][:,2])**2)**0.5
+
     halo_mass = halos["Group_M_Crit200"][:]
     halo_primarysubhalo = halos["GroupFirstSub"][:].astype(int)
     group_pos = halos["GroupPos"][:] / (h*1e3)
@@ -81,8 +91,8 @@ def load_subhalos(hydro: bool=True, cuts: dict=cuts, snapshot: int=snapshot) -> 
     
     # get subhalos/galaxies      
     df = pd.DataFrame(
-        np.column_stack([halo_id, subhalo_flag, np.arange(len(subhalo_stellarmass)), subhalo_pos, subhalo_vel, subhalo_n_stellar_particles, subhalo_gasmass, subhalo_stellarmass, subhalo_halomass, subhalo_stellarhalfmassradius, subhalo_vmax]), 
-        columns=['halo_id', 'subhalo_flag', 'subhalo_id', 'subhalo_x', 'subhalo_y', 'subhalo_z', 'subhalo_vx', 'subhalo_vy', 'subhalo_vz', 'subhalo_n_stellar_particles', 'subhalo_gasmass', 'subhalo_stellarmass', 'subhalo_halomass', 'subhalo_stellarhalfmassradius', 'subhalo_vmax'],
+        np.column_stack([halo_id, subhalo_flag, np.arange(len(subhalo_stellarmass)), subhalo_pos, subhalo_vel, subhalo_n_stellar_particles, subhalo_gasmass, subhalo_stellarmass, subhalo_halomass, subhalo_stellarhalfmassradius, subhalo_vmax, np.log10(subhalo_MRhalf), np.log10(subhalo_MRvmax), np.log10(subhalo_MR2half), np.log10(subhalo_RMhalf), np.log10(subhalo_spin), np.log10(subhalo_Vdisp), np.log10(subhalo_VmaxRad), np.log10(subhalo_offset)]), 
+        columns=['halo_id', 'subhalo_flag', 'subhalo_id', 'subhalo_x', 'subhalo_y', 'subhalo_z', 'subhalo_vx', 'subhalo_vy', 'subhalo_vz', 'subhalo_n_stellar_particles', 'subhalo_gasmass', 'subhalo_stellarmass', 'subhalo_halomass', 'subhalo_stellarhalfmassradius', 'subhalo_vmax', "subhalo_MRhalf", "subhalo_MRvmax", "subhalo_MR2half", "subhalo_RMhalf", "subhalo_spin", "subhalo_Vdisp", "subhalo_VmaxRad", "subhalo_offset"],
     )
     df["is_central"] = (halos.loc[df.halo_id]["halo_primarysubhalo"].values == df["subhalo_id"].values)
     
@@ -124,9 +134,6 @@ def load_subhalos(hydro: bool=True, cuts: dict=cuts, snapshot: int=snapshot) -> 
         # DM cuts -- do not put outside `if` statement, otherwise indices will be missing during the `prepare_subhalos()` call
         df.drop("subhalo_flag", axis=1, inplace=True)
         df = df[df["subhalo_loghalomass"] > cuts["minimum_log_halo_mass"]].copy()
-        # stellar mass and particle cuts
-        # df = df[df["subhalo_n_stellar_particles"] > cuts["minimum_n_star_particles"]].copy()
-        # df = df[df["subhalo_logstellarmass"] > cuts["minimum_log_stellar_mass"]].copy()
         
         # more columns to drop
         df.drop(
@@ -175,7 +182,6 @@ def load_trees(cuts=cuts) -> pd.DataFrame:
     """
 
     keys = ["SubhaloID", "SnapNum", "SubfindID", "DescendantID", "RootDescendantID", "SubhaloMass", "SubhaloVmax", "GroupFirstSub"]
-
     list_of_trees = []
 
     for i in range(0, 9):
@@ -183,8 +189,17 @@ def load_trees(cuts=cuts) -> pd.DataFrame:
     
         with h5py.File(filename, 'r') as f:
             df = pd.DataFrame(
-                {key: f[key][:] for key in keys}
+                {key: f[key][:] for key in (keys)}
             )
+            # other variables
+            subhalo_MRhalf = f["SubhaloMassInHalfRadType"][:,1]
+            subhalo_MRvmax = f["SubhaloMassInMaxRadType"][:,1]
+            subhalo_MR2half = f["SubhaloMassInRadType"][:,1]
+            subhalo_RMhalf = f["SubhaloHalfmassRadType"][:,1]
+            subhalo_spin = (f["SubhaloSpin"][:,0]**2 + f["SubhaloSpin"][:,1]**2 + f["SubhaloSpin"][:,2]**2)**0.5
+            subhalo_Vdisp = f["SubhaloVelDisp"][:]
+            subhalo_VmaxRad = f["SubhaloVmaxRad"][:]
+            subhalo_offset = ((f["SubhaloPos"][:,0] - f["SubhaloCM"][:,0])**2 + (f["SubhaloPos"][:,1] - f["SubhaloCM"][:,1])**2 + (f["SubhaloPos"][:,2] - f["SubhaloCM"][:,2])**2)**0.5
     
         # rename and process columns -- note e.g. that what we call "subhalo_id_in_current_snapshot" is actually 
         # "SubfindID" and indexes into the subhalo group catalog at a given snapshot. For snapshot 99 in the 
@@ -207,6 +222,17 @@ def load_trees(cuts=cuts) -> pd.DataFrame:
         df["subhalo_loghalomass_DMO"] = np.log10(df["SubhaloMass"] / h) + 10
         df["subhalo_logvmax_DMO"] = np.log10(df["SubhaloVmax"])
         df.drop(["SubhaloMass", "SubhaloVmax"], axis=1, inplace=True)
+
+        # add extra features -- note possible divide by zero errors
+        df["subhalo_MRhalf"] = np.log10(subhalo_MRhalf)
+        df["subhalo_MRvmax"] = np.log10(subhalo_MRvmax)
+        df["subhalo_MR2half"] = np.log10(subhalo_MR2half)
+        df["subhalo_RMhalf"] = np.log10(subhalo_RMhalf)
+        df["subhalo_spin"] = np.log10(subhalo_spin)
+        df["subhalo_Vdisp"] = np.log10(subhalo_Vdisp)
+        df["subhalo_VmaxRad"] = np.log10(subhalo_VmaxRad)
+        df["subhalo_offset"] = np.log10(subhalo_offset)
+        
 
         # apply mass cuts *only on root subhalo*
         if cuts is not None:

@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from torch_geometric.data import Data
 from torch_geometric.utils import to_undirected, remove_self_loops
 from torch_scatter import scatter_add
+from typing import List
 
 boxsize = (75 / 0.6774)     # box size in comoving Mpc/h
 h = 0.6774                  # reduced Hubble constant
@@ -23,7 +24,8 @@ def make_cosmic_graph(subhalos: pd.DataFrame, D_link: int, periodic: bool=True) 
     df.reset_index(drop=True)
 
     # DMO only properties
-    x = torch.tensor(df[['subhalo_loghalomass_DMO', 'subhalo_logvmax_DMO']].values, dtype=torch.float)
+    # x = torch.tensor(df[['subhalo_loghalomass_DMO', 'subhalo_logvmax_DMO', 'is_central']].values, dtype=torch.float)
+    x = torch.tensor(df[['subhalo_loghalomass_DMO', 'subhalo_logvmax_DMO', "subhalo_MRhalf", "subhalo_MRvmax", "subhalo_MR2half", "subhalo_RMhalf", "subhalo_spin", "subhalo_Vdisp", "subhalo_VmaxRad", "subhalo_offset", "is_central"]].values.astype(float), dtype=torch.float)
 
     # hydro properties
     x_hydro = torch.tensor(df[["subhalo_loghalomass", 'subhalo_logvmax']].values, dtype=torch.float)
@@ -143,7 +145,7 @@ def make_cosmic_graph(subhalos: pd.DataFrame, D_link: int, periodic: bool=True) 
     ).t()
 
     # include is_central as node feature
-    x = torch.cat([x, is_central.type(torch.float)], axis=1)[new_nodes]
+    x = x[new_nodes]
     y = y[new_nodes]
     pos = pos[new_nodes]
     vel = vel[new_nodes]
@@ -207,7 +209,8 @@ def make_merger_tree_graphs(trees: pd.DataFrame, subhalos: pd.DataFrame) -> list
             N_bad_stellar_mass += 1
             continue
 
-        x = torch.tensor(tree[["subhalo_loghalomass_DMO", "subhalo_logvmax_DMO", "is_central", "snapshot"]].values.astype(float), dtype=torch.float)
+        # x = torch.tensor(tree[["subhalo_loghalomass_DMO", "subhalo_logvmax_DMO", "is_central", "snapshot"]].values.astype(float), dtype=torch.float)
+        x = torch.tensor(tree[['subhalo_loghalomass_DMO', 'subhalo_logvmax_DMO', "subhalo_MRhalf", "subhalo_MRvmax", "subhalo_MR2half", "subhalo_RMhalf", "subhalo_spin", "subhalo_Vdisp", "subhalo_VmaxRad", "subhalo_offset", "is_central", "snapshot"]].values.astype(float), dtype=torch.float)
         
         edges = [(s, d) for s, d in zip(tree.subhalo_tree_id.values, tree.descendent_id.values) if d != -1]
         
@@ -229,3 +232,150 @@ def make_merger_tree_graphs(trees: pd.DataFrame, subhalos: pd.DataFrame) -> list
         N_bad_stellar_mass
     )
     return graphs
+
+
+def trim_merger_trees(graphs: List[Data]) -> List[Data]:
+    """
+    Remove nodes with exactly one incoming and one outgoing edge from merger trees.
+    """
+    trimmed_graphs = []
+
+    for graph in tqdm.tqdm(graphs):
+        # find nodes to remove
+        num_nodes = graph.num_nodes
+        row, col = graph.edge_index
+
+        out_degree = torch.zeros(num_nodes, dtype=torch.long, device=row.device)
+        out_degree.scatter_add_(0, row, torch.ones_like(row))
+        in_degree = torch.zeros(num_nodes, dtype=torch.long, device=col.device)
+        in_degree.scatter_add_(0, col, torch.ones_like(col))
+
+        nodes_to_remove = (in_degree == 1) & (out_degree == 1)
+
+        # skip if no trimming required
+        if not nodes_to_remove.any():
+            trimmed_graphs.append(graph.clone())
+            continue
+
+        # use bfs to rewire the graph
+        nodes_to_keep_mask = ~nodes_to_remove
+        nodes_to_keep_indices = torch.where(nodes_to_keep_mask)[0]
+        
+        # create an adjacency list for efficient traversal
+        adj = [[] for _ in range(num_nodes)]
+        for i, j in graph.edge_index.t().tolist():
+            adj[i].append(j)
+
+        new_edges = []
+        # find next reachable node
+        for start_node in nodes_to_keep_indices.tolist():
+            q = deque(adj[start_node])
+            visited = set(adj[start_node])
+
+            while q:
+                current_node = q.popleft()
+                # if this is a node to keep, we've found a new edge
+                if nodes_to_keep_mask[current_node]:
+                    new_edges.append((start_node, current_node))
+                # otherwise, continue the search down this path
+                else:
+                    for neighbor in adj[current_node]:
+                        if neighbor not in visited:
+                            visited.add(neighbor)
+                            q.append(neighbor)
+        
+        # handle this case if no edges left
+        if not new_edges:
+            new_edge_index = torch.empty((2, 0), dtype=torch.long, device=graph.edge_index.device)
+        else:
+            new_edge_index = torch.tensor(new_edges, device=graph.edge_index.device).t()
+        
+        # build a mapping tensor for fast, vectorized index conversion (old_idx -> new_idx)
+        remap_tensor = torch.full((num_nodes,), -1, dtype=torch.long, device=row.device)
+        remap_tensor[nodes_to_keep_indices] = torch.arange(len(nodes_to_keep_indices), device=row.device)
+        
+        final_edge_index = remap_tensor[new_edge_index]
+
+        # create the new Data object
+        trimmed_graph = Data(
+            x=graph.x[nodes_to_keep_mask],
+            edge_index=final_edge_index,
+            root_subhalo_id=graph.root_subhalo_id,
+            y=graph.y,
+        )
+
+        # recalculate edge attributes
+        if 'edge_attr' in graph:
+            trimmed_graph.edge_attr = (
+                trimmed_graph.x[final_edge_index[1], -1] -
+                trimmed_graph.x[final_edge_index[0], -1]
+            ).view(-1, 1)
+
+        trimmed_graphs.append(trimmed_graph)
+
+    return trimmed_graphs
+
+def create_stumps(graphs: List[Data], min_snap: int = 90, max_snap: int = 99) -> List[Data]:
+    """
+    Hack down merger trees to create "stumps" containing subgraph within snapshot range (inclusive of endpoints).
+    """
+    stump_data = []
+    for graph in tqdm.tqdm(graphs):
+        # keep nodes (assumes simulation snapshot is in final node feature = -1)
+        snapshot_numbers = graph.x[:, -1]
+        node_mask = (snapshot_numbers >= min_snap) & (snapshot_numbers <= max_snap)
+
+        # handle edge case with nothing
+        if not node_mask.any():
+            stump_data.append(Data(x=torch.empty(0, graph.num_node_features), edge_index=torch.empty(2, 0, dtype=torch.long)))
+            continue
+
+        # keeping edges & filtering with mask
+        row, col = graph.edge_index
+        edge_mask = node_mask[row] & node_mask[col]
+        subgraph_edge_index = graph.edge_index[:, edge_mask]
+
+        # re-map node indices in the filtered edge_index
+        nodes_to_keep_indices = torch.where(node_mask)[0]
+        remap_tensor = torch.full((graph.num_nodes,), -1, dtype=torch.long, device=graph.x.device)
+        remap_tensor[nodes_to_keep_indices] = torch.arange(
+            nodes_to_keep_indices.numel(), device=graph.x.device
+        )
+        new_edge_index = remap_tensor[subgraph_edge_index]
+
+        # create stump
+        tree_stump = Data(
+            x=graph.x[node_mask],
+            edge_index=new_edge_index,
+            y=graph.y,
+            root_subhalo_id=graph.root_subhalo_id,
+        )
+
+        # Also filter edge attributes if they exist
+        if 'edge_attr' in graph and graph.edge_attr is not None:
+            tree_stump.edge_attr = graph.edge_attr[edge_mask]
+
+        stump_data.append(tree_stump)
+
+    return stump_data
+
+def create_bonsai_stump_pairs(bonsais: List[Data], stumps: List[Data]) -> List[Data]:
+    """
+    Combines bonsai and stump graphs into single Data objects for dual processing.
+    """
+    assert len(bonsais) == len(stumps), "Bonsai and stump lists must have the same length."
+    
+    paired_graphs = []
+    for bonsai, stump in zip(bonsais, stumps):
+        paired_data = bonsai.clone()
+        
+        paired_data.x_stump = stump.x
+        paired_data.edge_index_stump = stump.edge_index
+        
+        # You can also add stump edge attributes if they exist
+        if 'edge_attr' in stump and stump.edge_attr is not None:
+            paired_data.edge_attr_stump = stump.edge_attr
+        
+        paired_graphs.append(paired_data)
+        
+    return paired_graphs

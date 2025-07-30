@@ -176,6 +176,7 @@ class MultiSAGENet(torch.nn.Module):
         n_hidden=16, 
         n_out=2,
         n_layers=4, 
+        act_fn=nn.SiLU(),
         aggr=["max", "mean"]
     ):
         super(MultiSAGENet, self).__init__()
@@ -185,14 +186,21 @@ class MultiSAGENet(torch.nn.Module):
         self.n_out = n_out
         self.n_layers = n_layers
         self.aggr = aggr
-
+        self.act_fn = act_fn
+        
         self.init_conv = SAGEConv(self.n_in, self.n_hidden, aggr=self.aggr)
         self.convs = nn.ModuleList()
+        
         for _ in range(self.n_layers - 1):
             self.convs.append(SAGEConv(self.n_hidden, self.n_hidden, aggr=self.aggr))
-
+            
         self.res_connection_adapter = nn.Linear(self.n_in, self.n_hidden)
 
+        # activation funcs
+        self.acts = nn.ModuleList()
+        for _ in range(self.n_layers):
+            self.acts.append(self.act_fn)
+        
         # layernorms
         self.lns = nn.ModuleList() 
         for _ in range(self.n_layers):
@@ -201,14 +209,14 @@ class MultiSAGENet(torch.nn.Module):
         # Node-level MLP
         self.mlp = nn.Sequential(
             nn.Linear(self.n_hidden, 4 * self.n_hidden, bias=True),
-            nn.SiLU(),
+            self.act_fn,
             nn.LayerNorm(4 * self.n_hidden),
             nn.Linear(4 * self.n_hidden, self.n_hidden, bias=True)
         )
         
         self.readout = nn.Sequential(
-            nn.Linear(3 * self.n_hidden + self.n_in, 4 * self.n_hidden, bias=True),
-            nn.SiLU(),
+            nn.Linear(2 * self.n_hidden + 2 * self.n_in, 4 * self.n_hidden, bias=True),
+            self.act_fn,
             nn.LayerNorm(4 * self.n_hidden),
             nn.Linear(4 * self.n_hidden, 2 * self.n_out, bias=True) 
         )
@@ -220,14 +228,14 @@ class MultiSAGENet(torch.nn.Module):
         x = self.init_conv(x, edge_index)
         x = self.lns[0](x)
         x = x + x_res
-        x = F.silu(x)
+        x = self.acts[0](x)
 
         for i in range(self.n_layers - 1):
             x_res = x  
             x = self.convs[i](x, edge_index)
             x = self.lns[i+1](x)
             x = x + x_res 
-            x = F.silu(x)
+            x = self.acts[i+1](x)
 
         x = self.mlp(x)
 
@@ -235,16 +243,103 @@ class MultiSAGENet(torch.nn.Module):
         root_node_indices = data.ptr[:-1]
         original_root_features = data.x[root_node_indices]
 
+        # get max of all original features
+        x_max = global_max_pool(data.x, batch)
+
         # pooling + root node features
         out = torch.cat([
             global_mean_pool(x, batch),
             global_max_pool(x, batch),
-            global_add_pool(x, batch),
-            original_root_features
+            # global_add_pool(x, batch),
+            original_root_features,
+            x_max
         ], dim=1)
                       
         return self.readout(out)
 
+class ModernSAGEBlock(nn.Module):
+    """
+    A modern SAGE block with Pre-Normalization and two sub-layers:
+    - SAGEConv for message passing (information mixing)
+    - An MLP for node-wise feature processing (non-linearity)
+    """
+    def __init__(self, channels, aggr=["max", "mean"], act_fn=nn.ReLU(), dropout=0.1):
+        super().__init__()
+        
+        self.norm1 = nn.LayerNorm(channels)
+        self.conv = SAGEConv(channels, channels, aggr=aggr)
+        
+        self.norm2 = nn.LayerNorm(channels)
+        self.mlp = nn.Sequential(
+            nn.Linear(channels, 4 * channels),
+            act_fn,
+            nn.Linear(4 * channels, channels),
+            nn.Dropout(dropout)
+        )
+        
+    def forward(self, h, edge_index):
+        h_residual_1 = h
+        h = self.norm1(h)
+        h = self.conv(h, edge_index)
+        h = h_residual_1 + h
+        
+        h_residual_2 = h
+        h = self.norm2(h)
+        h = self.mlp(h)
+        h = h_residual_2 + h
+        
+        return h
+
+class ModernSAGENet(torch.nn.Module):
+    def __init__(
+        self, 
+        n_in=4, 
+        n_hidden=16, 
+        n_out=2,
+        n_layers=4, 
+        act_fn=nn.ReLU(),
+        aggr=["max", "mean"]
+    ):
+        super().__init__()
+        
+        self.input_encoder = nn.Linear(n_in, n_hidden)
+        
+        self.gnn_blocks = nn.ModuleList(
+            [ModernSAGEBlock(n_hidden, aggr, act_fn) for _ in range(n_layers)]
+        )
+        
+        readout_in_dim = (2 * n_hidden) + (2 * n_in)
+        self.readout = nn.Sequential(
+            nn.Linear(readout_in_dim, 4 * n_hidden, bias=True),
+            act_fn,
+            nn.LayerNorm(4 * n_hidden),
+            nn.Linear(4 * n_hidden, 2 * n_out, bias=True)
+        )
+
+    def forward(self, data):
+        x, edge_index, batch = data.x, data.edge_index, data.batch
+
+        x = self.input_encoder(x)
+        
+        for block in self.gnn_blocks:
+            x = block(x, edge_index)
+            
+        root_node_indices = data.ptr[:-1]
+        original_root_features = data.x[root_node_indices]
+        x_max = global_max_pool(data.x, batch)
+
+        out = torch.cat([
+            global_mean_pool(x, batch),
+            global_max_pool(x, batch),
+            original_root_features,
+            x_max
+        ], dim=1)
+                      
+        return self.readout(out)
+
+######################
+#   BONSAI + STUMP   #
+###################### 
 class SAGEEncoder(torch.nn.Module):
     """Simple SAGE GNN encoder."""
     def __init__(self, n_in=4, n_hidden=16, n_layers=4, aggr=["max", "mean"]):
@@ -288,18 +383,19 @@ class BonsaiStumpSAGENet(torch.nn.Module):
     """
     A two-tower SAGE GNN to jointly process bonsai (trimmed) and stump (snapshots 90-99) graphs.
     """
-    def __init__(self, n_in=4, n_hidden=16, n_out=2, n_layers=4, aggr=["max", "mean"]):
+    def __init__(self, n_in=12, n_hidden=32, n_out=2, n_layers=4, aggr=["max", "mean"]):
         super().__init__()
         
         self.bonsai_encoder = SAGEEncoder(n_in, n_hidden, n_layers, aggr)
         self.stump_encoder = SAGEEncoder(n_in, n_hidden, n_layers, aggr)
         
-        readout_in_features = 4 * n_hidden + n_in
+        readout_in_features = 4 * n_hidden + 2 * n_in
         
         self.readout = nn.Sequential(
             nn.Linear(readout_in_features, 4 * n_hidden, bias=True),
             nn.SiLU(),
-            nn.LayerNorm(4 * n_hidden),
+            nn.Linear(4 * n_hidden, 4 * n_hidden, bias=True),
+            nn.SiLU(),
             nn.Linear(4 * n_hidden, 2 * n_out, bias=True)
         )
 
@@ -324,15 +420,123 @@ class BonsaiStumpSAGENet(torch.nn.Module):
             # global_add_pool(stump_node_feats, batch_stump),
         ], dim=1)
 
-        # skip connection using pointer back to original indexing (root features should be same between two)
+        # skip connection using pointer back to original root node's features
         bonsai_root_indices = data['bonsai'].ptr[:-1]
         bonsai_original_root_feats = x_bonsai[bonsai_root_indices]
+
+        # also use max features from stump        
+        stump_max_feats = global_max_pool(x_stump, batch_stump)
         
         # concat features
         combined_features = torch.cat([
             bonsai_pooled, 
             stump_pooled,
-            bonsai_original_root_feats
+            bonsai_original_root_feats,
+            stump_max_feats
+        ], dim=1)
+                      
+        return self.readout(combined_features)
+
+class ModernSAGEEncoder(torch.nn.Module):
+    """
+    A modern SAGE GNN encoder that stacks ModernSAGEBlocks.
+    """
+    def __init__(self, n_in=12, n_hidden=32, n_layers=4, aggr=["max", "mean"], act_fn=nn.ReLU()):
+        super().__init__()
+        
+        self.input_encoder = nn.Linear(n_in, n_hidden)
+        self.gnn_blocks = nn.ModuleList([ModernSAGEBlock(n_hidden, aggr, act_fn) for _ in range(n_layers)])
+        
+    def forward(self, x, edge_index):
+        x = self.input_encoder(x)
+        for block in self.gnn_blocks:
+            x = block(x, edge_index)
+        return x
+        
+class ModernBonsaiStumpSAGENet(torch.nn.Module):
+    """
+    A modernized two-tower SAGE GNN using ModernSAGEEncoder.
+    """
+    def __init__(self, n_in=12, n_hidden=32, n_out=2, n_layers=4, aggr=["max", "mean"], act_fn=nn.ReLU()):
+        super().__init__()
+        
+        self.bonsai_encoder = ModernSAGEEncoder(n_in, n_hidden, n_layers, aggr, act_fn)
+        self.stump_encoder = ModernSAGEEncoder(n_in, n_hidden, n_layers, aggr, act_fn)
+
+        readout_in_features = (2 * n_hidden) + (2 * n_hidden) + n_in + n_in
+        
+        self.readout = nn.Sequential(
+            nn.Linear(readout_in_features, 4 * n_hidden, bias=True),
+            act_fn,
+            nn.Linear(4 * n_hidden, 4 * n_hidden, bias=True),`
+            act_fn,
+            nn.Linear(4 * n_hidden, 2 * n_out, bias=True)
+        )
+
+    def forward(self, data):
+        # pruned bonsai GNN
+        x_bonsai, edge_index_bonsai, batch_bonsai = data['bonsai'].x, data['bonsai', 'to', 'bonsai'].edge_index, data['bonsai'].batch
+        bonsai_node_feats = self.bonsai_encoder(x_bonsai, edge_index_bonsai)
+        
+        bonsai_pooled = torch.cat([
+            global_mean_pool(bonsai_node_feats, batch_bonsai),
+            global_max_pool(bonsai_node_feats, batch_bonsai),
+        ], dim=1)
+
+        # truncated stump GNN
+        x_stump, edge_index_stump, batch_stump = data['stump'].x, data['stump', 'to', 'stump'].edge_index, data['stump'].batch
+        stump_node_feats = self.stump_encoder(x_stump, edge_index_stump)
+        
+        stump_pooled = torch.cat([
+            global_mean_pool(stump_node_feats, batch_stump),
+            global_max_pool(stump_node_feats, batch_stump),
+        ], dim=1)
+
+        # get snapshot99 + max subhalo feats
+        bonsai_root_indices = data['bonsai'].ptr[:-1]
+        bonsai_original_root_feats = x_bonsai[bonsai_root_indices]
+        stump_max_feats = global_max_pool(x_stump, batch_stump)
+        
+        combined_features = torch.cat([
+            bonsai_pooled, 
+            stump_pooled,
+            bonsai_original_root_feats,
+            stump_max_feats
+        ], dim=1)
+ 
+        return self.readout(combined_features)
+
+
+    def forward(self, data):
+        # Bonsai tower - uses the modern encoder
+        x_bonsai, edge_index_bonsai, batch_bonsai = data['bonsai'].x, data['bonsai', 'to', 'bonsai'].edge_index, data['bonsai'].batch
+        bonsai_node_feats = self.bonsai_encoder(x_bonsai, edge_index_bonsai)
+        
+        bonsai_pooled = torch.cat([
+            global_mean_pool(bonsai_node_feats, batch_bonsai),
+            global_max_pool(bonsai_node_feats, batch_bonsai),
+        ], dim=1)
+
+        # Stump tower - uses the modern encoder
+        x_stump, edge_index_stump, batch_stump = data['stump'].x, data['stump', 'to', 'stump'].edge_index, data['stump'].batch
+        stump_node_feats = self.stump_encoder(x_stump, edge_index_stump)
+        
+        stump_pooled = torch.cat([
+            global_mean_pool(stump_node_feats, batch_stump),
+            global_max_pool(stump_node_feats, batch_stump),
+        ], dim=1)
+
+        # Skip connection logic remains the same (it's domain-specific)
+        bonsai_root_indices = data['bonsai'].ptr[:-1]
+        bonsai_original_root_feats = x_bonsai[bonsai_root_indices]
+        stump_max_feats = global_max_pool(x_stump, batch_stump)
+        
+        # Concatenate all features for the final prediction
+        combined_features = torch.cat([
+            bonsai_pooled, 
+            stump_pooled,
+            bonsai_original_root_feats,
+            stump_max_feats
         ], dim=1)
                       
         return self.readout(combined_features)

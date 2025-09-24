@@ -68,9 +68,9 @@ def load_subhalos(hydro: bool=True, cuts: dict=cuts, snapshot: int=snapshot) -> 
     halo_id = subhalos["SubhaloGrNr"][:].astype(int)
 
     # extra subhalo features
-    subhalo_MRhalf = subhalos["SubhaloMassInHalfRadType"][:,1]
+    # subhalo_MRhalf = subhalos["SubhaloMassInHalfRadType"][:,1]
     subhalo_MRvmax = subhalos["SubhaloMassInMaxRadType"][:,1]
-    subhalo_MR2half = subhalos["SubhaloMassInRadType"][:,1]
+    # subhalo_MR2half = subhalos["SubhaloMassInRadType"][:,1]
     subhalo_RMhalf = subhalos["SubhaloHalfmassRadType"][:,1]
     subhalo_spin = (subhalos["SubhaloSpin"][:,0]**2 + subhalos["SubhaloSpin"][:,1]**2 + subhalos["SubhaloSpin"][:,2]**2)**0.5
     subhalo_Vdisp = subhalos["SubhaloVelDisp"][:]
@@ -91,8 +91,8 @@ def load_subhalos(hydro: bool=True, cuts: dict=cuts, snapshot: int=snapshot) -> 
     
     # get subhalos/galaxies      
     df = pd.DataFrame(
-        np.column_stack([halo_id, subhalo_flag, np.arange(len(subhalo_stellarmass)), subhalo_pos, subhalo_vel, subhalo_n_stellar_particles, subhalo_gasmass, subhalo_stellarmass, subhalo_halomass, subhalo_stellarhalfmassradius, subhalo_vmax, np.log10(subhalo_MRhalf), np.log10(subhalo_MRvmax), np.log10(subhalo_MR2half), np.log10(subhalo_RMhalf), np.log10(subhalo_spin), np.log10(subhalo_Vdisp), np.log10(subhalo_VmaxRad), np.log10(subhalo_offset)]), 
-        columns=['halo_id', 'subhalo_flag', 'subhalo_id', 'subhalo_x', 'subhalo_y', 'subhalo_z', 'subhalo_vx', 'subhalo_vy', 'subhalo_vz', 'subhalo_n_stellar_particles', 'subhalo_gasmass', 'subhalo_stellarmass', 'subhalo_halomass', 'subhalo_stellarhalfmassradius', 'subhalo_vmax', "subhalo_MRhalf", "subhalo_MRvmax", "subhalo_MR2half", "subhalo_RMhalf", "subhalo_spin", "subhalo_Vdisp", "subhalo_VmaxRad", "subhalo_offset"],
+        np.column_stack([halo_id, subhalo_flag, np.arange(len(subhalo_stellarmass)), subhalo_pos, subhalo_vel, subhalo_n_stellar_particles, subhalo_gasmass, subhalo_stellarmass, subhalo_halomass, subhalo_stellarhalfmassradius, subhalo_vmax, np.log10(subhalo_MRvmax), np.log10(subhalo_RMhalf), np.log10(subhalo_spin), np.log10(subhalo_Vdisp), np.log10(subhalo_VmaxRad), np.log10(subhalo_offset)]), 
+        columns=['halo_id', 'subhalo_flag', 'subhalo_id', 'subhalo_x', 'subhalo_y', 'subhalo_z', 'subhalo_vx', 'subhalo_vy', 'subhalo_vz', 'subhalo_n_stellar_particles', 'subhalo_gasmass', 'subhalo_stellarmass', 'subhalo_halomass', 'subhalo_stellarhalfmassradius', 'subhalo_vmax', "subhalo_MRvmax", "subhalo_RMhalf", "subhalo_spin", "subhalo_Vdisp", "subhalo_VmaxRad", "subhalo_offset"],
     )
     df["is_central"] = (halos.loc[df.halo_id]["halo_primarysubhalo"].values == df["subhalo_id"].values)
     
@@ -192,9 +192,9 @@ def load_trees(cuts=cuts) -> pd.DataFrame:
                 {key: f[key][:] for key in (keys)}
             )
             # other variables
-            subhalo_MRhalf = f["SubhaloMassInHalfRadType"][:,1]
+            # subhalo_MRhalf = f["SubhaloMassInHalfRadType"][:,1]
             subhalo_MRvmax = f["SubhaloMassInMaxRadType"][:,1]
-            subhalo_MR2half = f["SubhaloMassInRadType"][:,1]
+            # subhalo_MR2half = f["SubhaloMassInRadType"][:,1]
             subhalo_RMhalf = f["SubhaloHalfmassRadType"][:,1]
             subhalo_spin = (f["SubhaloSpin"][:,0]**2 + f["SubhaloSpin"][:,1]**2 + f["SubhaloSpin"][:,2]**2)**0.5
             subhalo_Vdisp = f["SubhaloVelDisp"][:]
@@ -224,9 +224,9 @@ def load_trees(cuts=cuts) -> pd.DataFrame:
         df.drop(["SubhaloMass", "SubhaloVmax"], axis=1, inplace=True)
 
         # add extra features -- note possible divide by zero errors
-        df["subhalo_MRhalf"] = np.log10(subhalo_MRhalf)
+        # df["subhalo_MRhalf"] = np.log10(subhalo_MRhalf)
         df["subhalo_MRvmax"] = np.log10(subhalo_MRvmax)
-        df["subhalo_MR2half"] = np.log10(subhalo_MR2half)
+        # df["subhalo_MR2half"] = np.log10(subhalo_MR2half)
         df["subhalo_RMhalf"] = np.log10(subhalo_RMhalf)
         df["subhalo_spin"] = np.log10(subhalo_spin)
         df["subhalo_Vdisp"] = np.log10(subhalo_Vdisp)

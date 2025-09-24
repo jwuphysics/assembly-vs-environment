@@ -208,17 +208,17 @@ class MultiSAGENet(torch.nn.Module):
 
         # Node-level MLP
         self.mlp = nn.Sequential(
-            nn.Linear(self.n_hidden, 4 * self.n_hidden, bias=True),
+            nn.Linear(self.n_hidden, 2 * self.n_hidden, bias=True),
             self.act_fn,
-            nn.LayerNorm(4 * self.n_hidden),
-            nn.Linear(4 * self.n_hidden, self.n_hidden, bias=True)
+            nn.LayerNorm(2 * self.n_hidden),
+            nn.Linear(2 * self.n_hidden, self.n_hidden, bias=True)
         )
         
         self.readout = nn.Sequential(
-            nn.Linear(2 * self.n_hidden + 2 * self.n_in, 4 * self.n_hidden, bias=True),
+            nn.Linear(2 * self.n_hidden + 2 * self.n_in, 2 * self.n_hidden, bias=True),
             self.act_fn,
-            nn.LayerNorm(4 * self.n_hidden),
-            nn.Linear(4 * self.n_hidden, 2 * self.n_out, bias=True) 
+            nn.LayerNorm(2 * self.n_hidden),
+            nn.Linear(2 * self.n_hidden, 2 * self.n_out, bias=True) 
         )
 
     def forward(self, data):
@@ -263,7 +263,7 @@ class ModernSAGEBlock(nn.Module):
     - SAGEConv for message passing (information mixing)
     - An MLP for node-wise feature processing (non-linearity)
     """
-    def __init__(self, channels, aggr=["max", "mean"], act_fn=nn.ReLU(), dropout=0.1):
+    def __init__(self, channels, aggr=["max", "mean"], act_fn=nn.SiLU()):
         super().__init__()
         
         self.norm1 = nn.LayerNorm(channels)
@@ -271,10 +271,9 @@ class ModernSAGEBlock(nn.Module):
         
         self.norm2 = nn.LayerNorm(channels)
         self.mlp = nn.Sequential(
-            nn.Linear(channels, 4 * channels),
+            nn.Linear(channels, 2 * channels),
             act_fn,
-            nn.Linear(4 * channels, channels),
-            nn.Dropout(dropout)
+            nn.Linear(2 * channels, channels),
         )
         
     def forward(self, h, edge_index):
@@ -297,7 +296,7 @@ class ModernSAGENet(torch.nn.Module):
         n_hidden=16, 
         n_out=2,
         n_layers=4, 
-        act_fn=nn.ReLU(),
+        act_fn=nn.SiLU(),
         aggr=["max", "mean"]
     ):
         super().__init__()
@@ -310,10 +309,10 @@ class ModernSAGENet(torch.nn.Module):
         
         readout_in_dim = (2 * n_hidden) + (2 * n_in)
         self.readout = nn.Sequential(
-            nn.Linear(readout_in_dim, 4 * n_hidden, bias=True),
+            nn.Linear(readout_in_dim, 2 * n_hidden, bias=True),
             act_fn,
-            nn.LayerNorm(4 * n_hidden),
-            nn.Linear(4 * n_hidden, 2 * n_out, bias=True)
+            nn.LayerNorm(2 * n_hidden),
+            nn.Linear(2 * n_hidden, 2 * n_out, bias=True)
         )
 
     def forward(self, data):
@@ -357,10 +356,10 @@ class SAGEEncoder(torch.nn.Module):
         self.res_connection_adapter = nn.Linear(n_in, n_hidden)
         
         self.mlp = nn.Sequential(
-            nn.Linear(n_hidden, 4 * n_hidden),
+            nn.Linear(n_hidden, 2 * n_hidden),
             nn.SiLU(),
-            nn.LayerNorm(4 * n_hidden),
-            nn.Linear(4 * n_hidden, n_hidden)
+            nn.LayerNorm(2 * n_hidden),
+            nn.Linear(2 * n_hidden, n_hidden)
         )
 
     def forward(self, x, edge_index):
@@ -394,9 +393,9 @@ class BonsaiStumpSAGENet(torch.nn.Module):
         self.readout = nn.Sequential(
             nn.Linear(readout_in_features, 4 * n_hidden, bias=True),
             nn.SiLU(),
-            nn.Linear(4 * n_hidden, 4 * n_hidden, bias=True),
+            nn.Linear(2 * n_hidden, 2 * n_hidden, bias=True),
             nn.SiLU(),
-            nn.Linear(4 * n_hidden, 2 * n_out, bias=True)
+            nn.Linear(2 * n_hidden, 2 * n_out, bias=True)
         )
 
     def forward(self, data):
@@ -441,7 +440,7 @@ class ModernSAGEEncoder(torch.nn.Module):
     """
     A modern SAGE GNN encoder that stacks ModernSAGEBlocks.
     """
-    def __init__(self, n_in=12, n_hidden=32, n_layers=4, aggr=["max", "mean"], act_fn=nn.ReLU()):
+    def __init__(self, n_in=12, n_hidden=32, n_layers=4, aggr=["max", "mean"], act_fn=nn.SiLU()):
         super().__init__()
         
         self.input_encoder = nn.Linear(n_in, n_hidden)
@@ -457,20 +456,20 @@ class ModernBonsaiStumpSAGENet(torch.nn.Module):
     """
     A modernized two-tower SAGE GNN using ModernSAGEEncoder.
     """
-    def __init__(self, n_in=12, n_hidden=32, n_out=2, n_layers=4, aggr=["max", "mean"], act_fn=nn.ReLU()):
+    def __init__(self, n_in=12, n_hidden=32, n_out=2, n_layers=4, aggr=["max", "mean"], act_fn=nn.SiLU()):
         super().__init__()
         
         self.bonsai_encoder = ModernSAGEEncoder(n_in, n_hidden, n_layers, aggr, act_fn)
         self.stump_encoder = ModernSAGEEncoder(n_in, n_hidden, n_layers, aggr, act_fn)
 
-        readout_in_features = (2 * n_hidden) + (2 * n_hidden) + n_in + n_in
+        readout_in_features = 4 * n_hidden + 2 * n_in
         
         self.readout = nn.Sequential(
-            nn.Linear(readout_in_features, 4 * n_hidden, bias=True),
+            nn.Linear(readout_in_features, 2 * n_hidden, bias=True),
             act_fn,
-            nn.Linear(4 * n_hidden, 4 * n_hidden, bias=True),`
+            nn.Linear(2 * n_hidden, 2 * n_hidden, bias=True),
             act_fn,
-            nn.Linear(4 * n_hidden, 2 * n_out, bias=True)
+            nn.Linear(2 * n_hidden, 2 * n_out, bias=True)
         )
 
     def forward(self, data):

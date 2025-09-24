@@ -25,7 +25,7 @@ def make_cosmic_graph(subhalos: pd.DataFrame, D_link: int, periodic: bool=True) 
 
     # DMO only properties
     # x = torch.tensor(df[['subhalo_loghalomass_DMO', 'subhalo_logvmax_DMO', 'is_central']].values, dtype=torch.float)
-    x = torch.tensor(df[['subhalo_loghalomass_DMO', 'subhalo_logvmax_DMO', "subhalo_MRhalf", "subhalo_MRvmax", "subhalo_MR2half", "subhalo_RMhalf", "subhalo_spin", "subhalo_Vdisp", "subhalo_VmaxRad", "subhalo_offset", "is_central"]].values.astype(float), dtype=torch.float)
+    x = torch.tensor(df[['subhalo_loghalomass_DMO', 'subhalo_logvmax_DMO', "subhalo_MRvmax", "subhalo_RMhalf", "subhalo_spin", "subhalo_Vdisp", "subhalo_VmaxRad", "subhalo_offset", "is_central"]].values.astype(float), dtype=torch.float)
 
     # hydro properties
     x_hydro = torch.tensor(df[["subhalo_loghalomass", 'subhalo_logvmax']].values, dtype=torch.float)
@@ -210,7 +210,7 @@ def make_merger_tree_graphs(trees: pd.DataFrame, subhalos: pd.DataFrame) -> list
             continue
 
         # x = torch.tensor(tree[["subhalo_loghalomass_DMO", "subhalo_logvmax_DMO", "is_central", "snapshot"]].values.astype(float), dtype=torch.float)
-        x = torch.tensor(tree[['subhalo_loghalomass_DMO', 'subhalo_logvmax_DMO', "subhalo_MRhalf", "subhalo_MRvmax", "subhalo_MR2half", "subhalo_RMhalf", "subhalo_spin", "subhalo_Vdisp", "subhalo_VmaxRad", "subhalo_offset", "is_central", "snapshot"]].values.astype(float), dtype=torch.float)
+        x = torch.tensor(tree[['subhalo_loghalomass_DMO', 'subhalo_logvmax_DMO', "subhalo_MRvmax", "subhalo_RMhalf", "subhalo_spin", "subhalo_Vdisp", "subhalo_VmaxRad", "subhalo_offset", "is_central", "snapshot"]].values.astype(float), dtype=torch.float)
         
         edges = [(s, d) for s, d in zip(tree.subhalo_tree_id.values, tree.descendent_id.values) if d != -1]
         
